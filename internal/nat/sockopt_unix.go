@@ -2,7 +2,11 @@
 
 package nat
 
-import "syscall"
+import (
+	"syscall"
+
+	"golang.org/x/sys/unix"
+)
 
 // dialControl sets SO_REUSEADDR and SO_REUSEPORT on the outgoing TCP socket.
 // SO_REUSEPORT lets us bind the same local port that the kin listener already
@@ -11,8 +15,8 @@ import "syscall"
 func dialControl(_, _ string, c syscall.RawConn) error {
 	return c.Control(func(fd uintptr) {
 		//nolint:errcheck // best-effort; the dial still proceeds on failure
-		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+		unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
 		//nolint:errcheck
-		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+		unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 	})
 }

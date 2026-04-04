@@ -5,6 +5,8 @@ package transport
 import (
 	"net"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // listenConfig returns a ListenConfig that sets SO_REUSEPORT on the TCP socket.
@@ -15,7 +17,7 @@ func listenConfig() net.ListenConfig {
 		Control: func(_, _ string, c syscall.RawConn) error {
 			return c.Control(func(fd uintptr) {
 				//nolint:errcheck // best-effort; bind still works without it
-				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+				unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 			})
 		},
 	}
