@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM alpine:3.21
 
-RUN adduser -D -u 1000 relay
+RUN adduser -D -u 1000 relay && mkdir -p /data && chown relay:relay /data
 
 COPY --from=builder /relay /relay
 
