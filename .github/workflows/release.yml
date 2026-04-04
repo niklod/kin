@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v prefix (e.g. 0.2.0)"
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Build & publish v${{ inputs.version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create tags and GitHub releases
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Version must be X.Y.Z (e.g. 0.2.0)"
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binaries
+        run: |
+          mkdir dist
+
+          # kin — desktop client
+          GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+            -o dist/kin-darwin-amd64        ./cmd/kin
+
+          GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+            -o dist/kin-darwin-arm64        ./cmd/kin
+
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+            -o dist/kin-windows-amd64.exe   ./cmd/kin
+
+          # relay — signaling server
+          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+            -o dist/relay-linux-amd64       ./cmd/relay
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ inputs.version }}"
+          files: dist/*
+          generate_release_notes: true

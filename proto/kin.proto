@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package kin;
+
+option go_package = "github.com/niklod/kin/kinpb";
+
+message Envelope {
+  oneof payload {
+    Handshake       handshake        = 1;
+    HandshakeAck    handshake_ack    = 2;
+    FileRequest     file_request     = 3;
+    FileResponse    file_response    = 4;
+    FileChunk       file_chunk       = 5;
+    // Relay signaling messages (6–10)
+    RelayRegister   relay_register   = 6;
+    RelayRegistered relay_registered = 7;
+    RelayConnect    relay_connect    = 8;
+    RelayRendezvous relay_rendezvous = 9;
+    RelayError      relay_error      = 10;
+    Error           error            = 15;
+  }
+}
+
+message Handshake {
+  bytes node_id    = 1; // 32-byte SHA-256(pubkey)
+  bytes public_key = 2; // 32-byte Ed25519 pubkey
+}
+
+message HandshakeAck {
+  bytes node_id    = 1;
+  bytes public_key = 2;
+}
+
+message FileRequest {
+  bytes file_id = 1; // 32-byte SHA-256 hash
+}
+
+message FileResponse {
+  bytes file_id   = 1;
+  int64 size      = 2;
+  bool  not_found = 3;
+}
+
+message FileChunk {
+  bytes file_id = 1;
+  bytes data    = 2;
+  bool  eof     = 3;
+}
+
+message Error {
+  string code    = 1;
+  string message = 2;
+}
+
+// ── Relay signaling ──────────────────────────────────────────────────────────
+
+// Node → Relay: register this node.
+message RelayRegister {
+  bytes  node_id     = 1; // 32 bytes
+  bytes  public_key  = 2; // 32 bytes Ed25519
+  uint32 listen_port = 3; // internal TCP port the node listens on for kin connections
+}
+
+// Relay → Node: registration confirmed.
+message RelayRegistered {
+  string external_addr = 1; // "ip:port" as seen by relay's TCP listener
+}
+
+// Node B → Relay: request rendezvous with target node.
+message RelayConnect {
+  bytes target_node_id = 1; // 32 bytes
+}
+
+// Relay → both A and B: peer info for simultaneous TCP connect.
+message RelayRendezvous {
+  bytes  peer_node_id       = 1; // 32 bytes
+  bytes  peer_public_key    = 2; // 32 bytes — for TLS verification after punch
+  string peer_external_addr = 3; // "ip:listen_port" — punch target
+}
+
+// Relay → Node: rendezvous failed.
+message RelayError {
+  string reason = 1; // "peer_not_registered", "peer_not_found"
+}

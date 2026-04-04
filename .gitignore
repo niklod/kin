@@ -30,3 +30,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+/implementation_plan.md
+/tasks.md
+/CLAUDE.md
+/plan/partitioned-swinging-tide.md
+/kin
+/bin/
