@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/niklod/kin/internal/identity"
 	"github.com/niklod/kin/internal/transport"
@@ -21,6 +22,31 @@ import (
 
 // ErrPunchFailed is returned when the hole punch dial does not succeed.
 var ErrPunchFailed = errors.New("nat: hole punch failed")
+
+// PrimeNAT sends a TCP SYN from localPort to peerAddr to create a NAT mapping
+// on the local router. This allows a subsequent inbound SYN from peerAddr to
+// reach our listener. The dial is expected to fail (peer's NAT will drop it);
+// errors are intentionally ignored.
+func PrimeNAT(ctx context.Context, localPort uint32, peerAddr string) {
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	slog.Debug("nat: priming NAT", "local_port", localPort, "peer_addr", peerAddr)
+
+	dialer := net.Dialer{
+		LocalAddr: &net.TCPAddr{Port: int(localPort)},
+		Control:   dialControl,
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", peerAddr)
+	if err != nil {
+		slog.Debug("nat: prime dial failed (expected)", "peer_addr", peerAddr, "err", err)
+		return
+	}
+	// Unexpected success (e.g. both nodes on same network): close immediately,
+	// the real connection will be established by nat.Punch on the initiator side.
+	conn.Close()
+	slog.Debug("nat: prime dial unexpectedly succeeded, closed", "peer_addr", peerAddr)
+}
 
 // Punch dials peerAddr from localPort using SO_REUSEPORT, then wraps the
 // resulting connection in mutual TLS verified against peerNodeID.

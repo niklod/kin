@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/niklod/kin/internal/nat"
 	"github.com/niklod/kin/internal/relay"
 )
 
@@ -46,6 +47,10 @@ func (d *Dialer) ServePunch(ctx context.Context, relayAddr string, logger *slog.
 			logger.Info("connmgr: rendezvous inbound",
 				"peer", fmt.Sprintf("%x", rv.PeerNodeID[:8]),
 				"peer_addr", rv.PeerExternalAddr)
+			// Prime our NAT: send a SYN from our listen port to the peer's
+			// external address. This creates a mapping in our NAT router so
+			// the peer's subsequent nat.Punch SYN can reach our listener.
+			go nat.PrimeNAT(ctx, d.LocalPort, rv.PeerExternalAddr)
 		}
 	}
 }
