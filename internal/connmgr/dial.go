@@ -20,7 +20,10 @@ import (
 	"github.com/niklod/kin/internal/transport"
 )
 
-const punchTimeout = 5 * time.Second
+const (
+	punchTimeout    = 5 * time.Second
+	punchPrimeDelay = 300 * time.Millisecond // time for the remote peer to prime its NAT
+)
 
 // ErrNoRoute is returned when all connection attempts fail.
 var ErrNoRoute = errors.New("connmgr: no route to peer")
@@ -97,6 +100,13 @@ func (d *Dialer) punchViaRelay(ctx context.Context, peerNodeID [32]byte, relayAd
 	slog.Debug("connmgr: rendezvous received",
 		"peer", fmt.Sprintf("%x", rv.PeerNodeID[:8]),
 		"peer_external_addr", rv.PeerExternalAddr)
+
+	// Wait for the remote peer to prime its NAT before sending our SYN.
+	select {
+	case <-time.After(punchPrimeDelay):
+	case <-punchCtx.Done():
+		return nil, fmt.Errorf("punch: %w", punchCtx.Err())
+	}
 
 	slog.Debug("connmgr: punching",
 		"peer_addr", rv.PeerExternalAddr,
