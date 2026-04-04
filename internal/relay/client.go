@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -43,6 +44,9 @@ type Client struct {
 // Connect dials the relay at addr (TLS, InsecureSkipVerify), sends RelayRegister,
 // and waits for RelayRegistered. Returns a ready Client.
 func Connect(ctx context.Context, addr string, id *identity.Identity, listenPort uint32) (*Client, error) {
+	slog.Debug("relay: dialing", "addr", addr, "listen_port", listenPort,
+		"node_id", fmt.Sprintf("%x", id.NodeID[:8]))
+
 	dialer := &tls.Dialer{
 		Config: &tls.Config{
 			InsecureSkipVerify: true, //nolint:gosec // relay cert not pinned in MVP
@@ -51,8 +55,10 @@ func Connect(ctx context.Context, addr string, id *identity.Identity, listenPort
 	}
 	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
+		slog.Debug("relay: TCP dial failed", "addr", addr, "err", err)
 		return nil, fmt.Errorf("relay connect: %w", err)
 	}
+	slog.Debug("relay: TCP connected", "addr", addr)
 
 	// Send registration.
 	if err := protocol.WriteMsg(rawConn, &kinpb.Envelope{Payload: &kinpb.Envelope_RelayRegister{
@@ -78,6 +84,8 @@ func Connect(ctx context.Context, addr string, id *identity.Identity, listenPort
 		return nil, fmt.Errorf("relay: expected RelayRegistered, got %T", env.Payload)
 	}
 
+	slog.Debug("relay: registered", "external_addr", reg.ExternalAddr)
+
 	c := &Client{
 		id:           id,
 		listenPort:   listenPort,
@@ -101,6 +109,8 @@ func (c *Client) ExternalAddr() string { return c.externalAddr }
 // RequestRendezvous asks the relay to connect this node with targetNodeID.
 // Blocks until RelayRendezvous or an error arrives (or ctx is cancelled).
 func (c *Client) RequestRendezvous(ctx context.Context, targetNodeID [32]byte) (*RendezvousInfo, error) {
+	slog.Debug("relay: requesting rendezvous", "target", fmt.Sprintf("%x", targetNodeID[:8]))
+
 	ch := make(chan *kinpb.RelayRendezvous, 1)
 	c.mu.Lock()
 	if c.closed {
@@ -124,14 +134,19 @@ func (c *Client) RequestRendezvous(ctx context.Context, targetNodeID [32]byte) (
 
 	select {
 	case <-ctx.Done():
+		slog.Debug("relay: rendezvous wait cancelled", "err", ctx.Err())
 		return nil, ctx.Err()
 	case rv, ok := <-ch:
 		if !ok {
+			slog.Debug("relay: rendezvous channel closed (relay disconnected)")
 			return nil, ErrRelayDisconnected
 		}
 		if len(rv.PeerNodeId) != 32 {
 			return nil, fmt.Errorf("relay: invalid rendezvous peer_node_id length")
 		}
+		slog.Debug("relay: rendezvous received",
+			"peer", fmt.Sprintf("%x", rv.PeerNodeId[:8]),
+			"peer_external_addr", rv.PeerExternalAddr)
 		return rendezvousFromProto(rv), nil
 	}
 }
@@ -210,10 +225,15 @@ func (c *Client) dispatchRendezvous(rv *kinpb.RelayRendezvous) {
 	var peerID [32]byte
 	copy(peerID[:], rv.PeerNodeId)
 
+	slog.Debug("relay: dispatch rendezvous",
+		"peer", fmt.Sprintf("%x", peerID[:8]),
+		"peer_external_addr", rv.PeerExternalAddr)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if ch, ok := c.pending[peerID]; ok {
+		slog.Debug("relay: routed to waiter", "peer", fmt.Sprintf("%x", peerID[:8]))
 		select {
 		case ch <- rv:
 		default:
@@ -234,8 +254,8 @@ func (c *Client) dispatchRendezvous(rv *kinpb.RelayRendezvous) {
 func (c *Client) dispatchError(re *kinpb.RelayError) {
 	// The relay doesn't echo back the target NodeID, so we can't route the error
 	// to a specific waiter. Close all pending waiters so callers unblock with
-	// ErrRelayDisconnected and can retry. The reason is preserved for logging.
-	_ = re.Reason // available for future per-waiter error propagation
+	// ErrRelayDisconnected and can retry.
+	slog.Debug("relay: relay error received", "reason", re.Reason)
 	c.closeAllPending()
 }
 

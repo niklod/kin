@@ -38,7 +38,14 @@ func main() {
 	configDir := flag.String("config-dir", "", "override config directory")
 	listenAddr := flag.String("listen", defaultListenAddr, "address to listen on")
 	relayAddr := flag.String("relay", "", "relay server address (host:port) for NAT traversal")
+	debug := flag.Bool("debug", false, "enable verbose debug logging")
 	flag.Parse()
+
+	if *debug {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})))
+	}
 
 	args := flag.Args()
 	if len(args) == 0 {
