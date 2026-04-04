@@ -1,7 +1,6 @@
 services:
   relay:
     build: .
-    image: kin-relay:latest
     restart: unless-stopped
     ports:
       - "7778:7778"
