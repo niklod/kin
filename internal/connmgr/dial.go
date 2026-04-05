@@ -1,9 +1,9 @@
 // Package connmgr implements the connection establishment strategy for Kin:
-// direct TCP first, relay-assisted NAT hole punching second.
+// direct QUIC first, relay-assisted NAT hole punching second.
 //
 // Relay endpoints in the invite token use the "relay://host:port" scheme.
-// When direct TCP fails, the Dialer connects to the relay, requests a rendezvous,
-// and uses nat.Punch for TCP simultaneous open to traverse NAT.
+// When direct QUIC fails, the Dialer connects to the relay, requests a rendezvous,
+// and uses nat.Punch for UDP hole punching to traverse NAT.
 package connmgr
 
 import (
@@ -20,22 +20,19 @@ import (
 	"github.com/niklod/kin/internal/transport"
 )
 
-const (
-	punchTimeout    = 5 * time.Second
-	punchPrimeDelay = 300 * time.Millisecond // time for the remote peer to prime its NAT
-)
+const punchTimeout = 5 * time.Second
 
 // ErrNoRoute is returned when all connection attempts fail.
 var ErrNoRoute = errors.New("connmgr: no route to peer")
 
 // Dialer establishes outbound connections to peers.
 type Dialer struct {
-	ID        *identity.Identity
-	LocalPort uint32 // kin listen port, used as source port for NAT punch
+	ID       *identity.Identity
+	Listener *transport.Listener // shared UDP socket for direct dial and NAT punch
 }
 
 // Dial connects to a peer identified by peerNodeID, trying each strategy in order:
-//  1. Direct TCP to non-relay endpoints.
+//  1. Direct QUIC to non-relay endpoints.
 //  2. Relay-assisted NAT hole punch to relay:// endpoints.
 //
 // Returns ErrNoRoute if all strategies fail.
@@ -45,19 +42,18 @@ func (d *Dialer) Dial(ctx context.Context, peerNodeID [32]byte, endpoints []stri
 	slog.Debug("connmgr: dial start",
 		"peer", fmt.Sprintf("%x", peerNodeID[:8]),
 		"direct_endpoints", direct,
-		"relay_endpoints", relayAddrs,
-		"local_port", d.LocalPort)
+		"relay_endpoints", relayAddrs)
 
-	// 1. Direct TCP.
+	// 1. Direct QUIC.
 	if conn, err := tryEach(direct, func(ep string) (*transport.Conn, error) {
-		slog.Debug("connmgr: trying direct TCP", "addr", ep)
-		c, e := transport.DialContext(ctx, ep, d.ID, peerNodeID)
+		slog.Debug("connmgr: trying direct QUIC", "addr", ep)
+		c, e := d.Listener.Dial(ctx, ep, peerNodeID)
 		if e != nil {
-			slog.Debug("connmgr: direct TCP failed", "addr", ep, "err", e)
+			slog.Debug("connmgr: direct QUIC failed", "addr", ep, "err", e)
 		}
 		return c, e
 	}); err == nil {
-		slog.Debug("connmgr: direct TCP connected")
+		slog.Debug("connmgr: direct QUIC connected")
 		return conn, nil
 	}
 
@@ -80,7 +76,7 @@ func (d *Dialer) Dial(ctx context.Context, peerNodeID [32]byte, endpoints []stri
 
 func (d *Dialer) punchViaRelay(ctx context.Context, peerNodeID [32]byte, relayAddr string) (*transport.Conn, error) {
 	slog.Debug("connmgr: connecting to relay", "relay", relayAddr)
-	rc, err := relay.Connect(ctx, relayAddr, d.ID, d.LocalPort)
+	rc, err := relay.Connect(ctx, relayAddr, d.ID, uint32(d.Listener.Port()))
 	if err != nil {
 		return nil, fmt.Errorf("relay %s: %w", relayAddr, err)
 	}
@@ -101,18 +97,9 @@ func (d *Dialer) punchViaRelay(ctx context.Context, peerNodeID [32]byte, relayAd
 		"peer", fmt.Sprintf("%x", rv.PeerNodeID[:8]),
 		"peer_external_addr", rv.PeerExternalAddr)
 
-	// Wait for the remote peer to prime its NAT before sending our SYN.
-	select {
-	case <-time.After(punchPrimeDelay):
-	case <-punchCtx.Done():
-		return nil, fmt.Errorf("punch: %w", punchCtx.Err())
-	}
+	slog.Debug("connmgr: punching", "peer_addr", rv.PeerExternalAddr)
 
-	slog.Debug("connmgr: punching",
-		"peer_addr", rv.PeerExternalAddr,
-		"local_port", d.LocalPort)
-
-	conn, err := nat.Punch(punchCtx, d.LocalPort, rv.PeerExternalAddr, d.ID, peerNodeID)
+	conn, err := nat.Punch(punchCtx, d.Listener, rv.PeerExternalAddr, peerNodeID)
 	if err != nil {
 		return nil, fmt.Errorf("punch: %w", err)
 	}
@@ -138,7 +125,7 @@ func tryEach(addrs []string, try func(string) (*transport.Conn, error)) (*transp
 	return nil, ErrNoRoute
 }
 
-// splitEndpoints partitions endpoints into plain TCP addresses and relay addresses.
+// splitEndpoints partitions endpoints into plain addresses and relay addresses.
 // Relay addresses are returned stripped of the "relay://" prefix.
 func splitEndpoints(endpoints []string) (direct, relayAddrs []string) {
 	for _, ep := range endpoints {

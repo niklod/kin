@@ -1,4 +1,4 @@
-// Package transport provides mutual TLS over TCP with Ed25519-based peer authentication.
+// Package transport provides QUIC-based peer-to-peer transport with Ed25519 identity.
 //
 // Trust model: InsecureSkipVerify=true on both sides. Peer identity is verified
 // via a custom VerifyPeerCertificate callback that extracts the Ed25519 public key
@@ -20,6 +20,8 @@ import (
 
 	"github.com/niklod/kin/internal/identity"
 )
+
+const alpnKin = "kin/1"
 
 // GenerateSelfSignedCert creates a TLS certificate from the given Ed25519 key pair.
 // The certificate is self-signed and valid for 10 years.
@@ -84,6 +86,7 @@ func serverTLSConfig(cert tls.Certificate) *tls.Config {
 		ClientAuth:         tls.RequireAnyClientCert,
 		InsecureSkipVerify: true, //nolint:gosec // intentional; peer identity checked via NodeID
 		MinVersion:         tls.VersionTLS13,
+		NextProtos:         []string{alpnKin},
 	}
 }
 
@@ -94,6 +97,7 @@ func clientTLSConfig(cert tls.Certificate, expectedNodeID [32]byte) *tls.Config 
 		Certificates:       []tls.Certificate{cert},
 		InsecureSkipVerify: true, //nolint:gosec // intentional; peer identity checked below
 		MinVersion:         tls.VersionTLS13,
+		NextProtos:         []string{alpnKin},
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			certs, err := parseCerts(rawCerts)
 			if err != nil {

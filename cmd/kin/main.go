@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -110,8 +109,6 @@ func cmdRun(cfgDir, listenAddr, relayAddr string) {
 	}
 	defer ln.Close()
 
-	listenPort := extractPort(ln.Addr().String())
-
 	fmt.Printf("kin running\n")
 	fmt.Printf("  NodeID: %s\n", id.NodeIDHex())
 	fmt.Printf("  Listen: %s\n", ln.Addr())
@@ -146,7 +143,7 @@ func cmdRun(cfgDir, listenAddr, relayAddr string) {
 	// Register with relay and keep the connection alive so remote peers can
 	// discover our external address for NAT hole punching.
 	if relayAddr != "" {
-		d := &connmgr.Dialer{ID: id, LocalPort: listenPort}
+		d := &connmgr.Dialer{ID: id, Listener: ln}
 		go func() {
 			backoff := time.Second
 			const maxBackoff = 30 * time.Second
@@ -221,8 +218,26 @@ func cmdJoin(cfgDir, rawToken, listenAddr string) {
 		fatalf("invite has no endpoints")
 	}
 
-	listenPort := extractPort(listenAddr)
-	d := &connmgr.Dialer{ID: id, LocalPort: listenPort}
+	// Open a listener so Dial can share the UDP socket for NAT punch.
+	// Use --listen 0.0.0.0:0 (or a different port) if kin run is already
+	// binding the default port on this host.
+	ln, err := transport.Listen(listenAddr, id)
+	if err != nil {
+		fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	// Drain any inbound QUIC attempts that arrive during the join window.
+	go func() {
+		for {
+			c, _, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	d := &connmgr.Dialer{ID: id, Listener: ln}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -278,19 +293,6 @@ func mustOpenStore(cfgDir string) *peerstore.Store {
 		fatalf("peerstore: %v", err)
 	}
 	return s
-}
-
-// extractPort parses a "host:port" or ":port" address and returns the port as uint32.
-func extractPort(addr string) uint32 {
-	_, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return 0
-	}
-	p, err := strconv.Atoi(portStr)
-	if err != nil {
-		return 0
-	}
-	return uint32(p)
 }
 
 func fatalf(format string, args ...any) {

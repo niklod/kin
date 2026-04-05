@@ -1,7 +1,11 @@
 package transport_test
 
 import (
+	"context"
 	"errors"
+	"net"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/niklod/kin/internal/identity"
@@ -196,10 +200,13 @@ func TestConn_RemoteAddr(t *testing.T) {
 
 func TestListen_ClosedListener(t *testing.T) {
 	id := mustGenID(t)
-	ln := startListener(t, id)
+	ln, err := transport.Listen("127.0.0.1:0", id)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
 	ln.Close()
 
-	_, _, err := ln.Accept()
+	_, _, err = ln.Accept()
 	if err == nil {
 		t.Error("Accept on closed listener: expected error, got nil")
 	}
@@ -209,5 +216,113 @@ func TestNodeIDFromCert_EmptyCerts(t *testing.T) {
 	_, err := transport.NodeIDFromCert(nil)
 	if err == nil {
 		t.Error("NodeIDFromCert(nil): expected error, got nil")
+	}
+}
+
+func TestListener_Port_MatchesAddr(t *testing.T) {
+	id := mustGenID(t)
+	ln := startListener(t, id)
+
+	addrStr := ln.Addr().String()
+	_, portStr, err := net.SplitHostPort(addrStr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", addrStr, err)
+	}
+
+	port64, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		t.Fatalf("ParseUint(%q): %v", portStr, err)
+	}
+	addrPort := uint16(port64)
+
+	if ln.Port() != addrPort {
+		t.Errorf("Port() = %d, addr port = %d", ln.Port(), addrPort)
+	}
+}
+
+func TestListener_Dial_SharedTransport(t *testing.T) {
+	idA := mustGenID(t)
+	idB := mustGenID(t)
+	lnA := startListener(t, idA)
+	lnB := startListener(t, idB)
+
+	errCh := make(chan error, 1)
+	go func() {
+		conn, peerID, err := lnB.Accept()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if peerID != idA.NodeID {
+			errCh <- errors.New("lnB: unexpected peer NodeID")
+			return
+		}
+		errCh <- nil
+	}()
+
+	ctx := context.Background()
+	connA, err := lnA.Dial(ctx, lnB.Addr().String(), idB.NodeID)
+	if err != nil {
+		t.Fatalf("lnA.Dial: %v", err)
+	}
+	defer connA.Close()
+
+	if connA.PeerNodeID != idB.NodeID {
+		t.Errorf("PeerNodeID = %x, want %x", connA.PeerNodeID, idB.NodeID)
+	}
+	if err := <-errCh; err != nil {
+		t.Errorf("server error: %v", err)
+	}
+}
+
+func TestListener_Prime_NoError(t *testing.T) {
+	id := mustGenID(t)
+	ln := startListener(t, id)
+
+	// Prime to a port that has nothing listening — should not error.
+	// (UDP writes to closed ports succeed at the socket level.)
+	if err := ln.Prime("127.0.0.1:19999"); err != nil {
+		t.Errorf("Prime: unexpected error: %v", err)
+	}
+}
+
+func TestConn_Close_PropagatesToPeer(t *testing.T) {
+	serverID := mustGenID(t)
+	clientID := mustGenID(t)
+	ln := startListener(t, serverID)
+
+	recvErrCh := make(chan error, 1)
+	go func() {
+		conn, _, err := ln.Accept()
+		if err != nil {
+			recvErrCh <- err
+			return
+		}
+		_, err = conn.Recv()
+		recvErrCh <- err
+	}()
+
+	clientConn, err := transport.Dial(ln.Addr().String(), clientID, serverID.NodeID)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+
+	// Close the client — server's Recv should return an error, not hang.
+	clientConn.Close()
+
+	recvErr := <-recvErrCh
+	if recvErr == nil {
+		t.Error("server Recv: expected error after peer closed, got nil")
+	}
+}
+
+func TestListener_Addr_IsUDP(t *testing.T) {
+	id := mustGenID(t)
+	ln := startListener(t, id)
+
+	addr := ln.Addr().String()
+	if !strings.Contains(addr, ":") {
+		t.Errorf("Addr = %q, expected host:port format", addr)
 	}
 }

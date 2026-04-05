@@ -13,10 +13,8 @@ import (
 // connection alive so that remote peers can discover this node's external address
 // via RequestRendezvous and punch directly to this node's listener.
 //
-// When a RelayRendezvous arrives on the relay's Incoming channel, the remote peer
-// (the initiator) will be dialing this node's external address using nat.Punch.
-// Since the listener already accepts those incoming connections in TLS-server mode,
-// no punch-back is required from this side.
+// When a RelayRendezvous arrives, this node primes its NAT immediately so the
+// initiator's QUIC packets can reach the listener.
 //
 // Blocks until ctx is cancelled or the relay connection drops.
 // The caller should restart ServePunch on error if continuous relay presence is needed.
@@ -25,7 +23,7 @@ func (d *Dialer) ServePunch(ctx context.Context, relayAddr string, logger *slog.
 		logger = slog.Default()
 	}
 
-	rc, err := relay.Connect(ctx, relayAddr, d.ID, d.LocalPort)
+	rc, err := relay.Connect(ctx, relayAddr, d.ID, uint32(d.Listener.Port()))
 	if err != nil {
 		return fmt.Errorf("relay connect: %w", err)
 	}
@@ -41,16 +39,10 @@ func (d *Dialer) ServePunch(ctx context.Context, relayAddr string, logger *slog.
 			if !ok {
 				return fmt.Errorf("connmgr: relay connection lost")
 			}
-			// The remote peer (rv.PeerNodeID) will punch TO our external addr.
-			// Our transport.Listener accepts the incoming TCP connection and performs
-			// the TLS server-side handshake automatically.
 			logger.Info("connmgr: rendezvous inbound",
 				"peer", fmt.Sprintf("%x", rv.PeerNodeID[:8]),
 				"peer_addr", rv.PeerExternalAddr)
-			// Prime our NAT: send a SYN from our listen port to the peer's
-			// external address. This creates a mapping in our NAT router so
-			// the peer's subsequent nat.Punch SYN can reach our listener.
-			go nat.PrimeNAT(ctx, d.LocalPort, rv.PeerExternalAddr)
+			go nat.PrimeNAT(ctx, d.Listener, rv.PeerExternalAddr)
 		}
 	}
 }

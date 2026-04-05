@@ -2,50 +2,58 @@ package transport
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
+
+	"github.com/quic-go/quic-go"
 
 	"github.com/niklod/kin/internal/identity"
 )
 
-// Dial establishes a mutual TLS connection to addr, verifying that the server's
+// Dial establishes a QUIC connection to addr, verifying that the remote peer's
 // NodeID matches expectedNodeID. Uses a background context; prefer DialContext
 // when a deadline or cancellation is needed.
+//
+// This function opens a fresh UDP socket. When NAT hole punching is required,
+// use Listener.Dial instead so the connection shares the listener's UDP port.
 func Dial(addr string, id *identity.Identity, expectedNodeID [32]byte) (*Conn, error) {
 	return DialContext(context.Background(), addr, id, expectedNodeID)
 }
 
-// DialContext establishes a mutual TLS connection to addr with context support,
-// verifying the server's NodeID matches expectedNodeID.
+// DialContext establishes a QUIC connection to addr with context support,
+// verifying the remote peer's NodeID matches expectedNodeID.
+//
+// This function opens a fresh UDP socket. When NAT hole punching is required,
+// use Listener.Dial instead so the connection shares the listener's UDP port.
 func DialContext(ctx context.Context, addr string, id *identity.Identity, expectedNodeID [32]byte) (*Conn, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", addr, err)
+	}
+
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		return nil, fmt.Errorf("dial: open udp socket: %w", err)
+	}
+
 	cert, err := certFromIdentity(id, "dial")
 	if err != nil {
+		_ = udpConn.Close()
 		return nil, err
 	}
-	cfg := clientTLSConfig(cert, expectedNodeID)
-	dialer := tls.Dialer{Config: cfg}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", addr, err)
-	}
-	return newConn(conn.(*tls.Conn), expectedNodeID), nil
-}
 
-// DialConn wraps an existing net.Conn in mutual TLS client mode,
-// verifying the server's NodeID matches expectedNodeID.
-// rawConn is closed on any error.
-func DialConn(rawConn net.Conn, id *identity.Identity, expectedNodeID [32]byte) (*Conn, error) {
-	cert, err := certFromIdentity(id, "dial-conn")
+	qt := &quic.Transport{Conn: udpConn}
+	qConn, err := qt.Dial(ctx, udpAddr, clientTLSConfig(cert, expectedNodeID), defaultQUICConfig())
 	if err != nil {
-		rawConn.Close()
+		_ = qt.Close()
+		return nil, fmt.Errorf("quic dial %s: %w", addr, err)
+	}
+
+	stream, err := openDialStream(ctx, qConn)
+	if err != nil {
+		_ = qt.Close()
 		return nil, err
 	}
-	cfg := clientTLSConfig(cert, expectedNodeID)
-	tlsConn := tls.Client(rawConn, cfg)
-	if err := tlsConn.Handshake(); err != nil {
-		tlsConn.Close()
-		return nil, fmt.Errorf("dial-conn: TLS handshake: %w", err)
-	}
-	return newConn(tlsConn, expectedNodeID), nil
+
+	return newOwnedConn(qConn, stream, expectedNodeID, qt), nil
 }

@@ -1,3 +1,7 @@
+> **SUPERSEDED** — TCP simultaneous open was abandoned due to a timing race on real NAT routers.
+> See `docs/013-tcp-punch-failure-quic-migration.md` for the failure analysis and
+> `docs/014-quic-shared-transport.md` + `docs/016-udp-prime-burst.md` for the replacement design.
+
 # Decision 010: TCP Simultaneous Open for NAT Hole Punching
 
 **Date:** 2026-04-04

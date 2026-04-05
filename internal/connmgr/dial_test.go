@@ -14,10 +14,19 @@ import (
 	"github.com/niklod/kin/internal/transport"
 )
 
+func mustGenID(t *testing.T) *identity.Identity {
+	t.Helper()
+	id, err := identity.Generate()
+	if err != nil {
+		t.Fatalf("identity.Generate: %v", err)
+	}
+	return id
+}
+
 // startRelay starts a TLS relay server and returns its host:port.
 func startRelay(t *testing.T) string {
 	t.Helper()
-	relayID, _ := identity.Generate()
+	relayID := mustGenID(t)
 	cert, err := transport.GenerateSelfSignedCert(relayID.PrivKey)
 	if err != nil {
 		t.Fatalf("relay cert: %v", err)
@@ -47,8 +56,8 @@ func startRelay(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-// startPeer starts a transport.Listener and returns its address and a channel of incoming Conns.
-func startPeer(t *testing.T, id *identity.Identity) (addr string, conns chan *transport.Conn) {
+// startPeer starts a transport.Listener and returns it alongside a channel of incoming Conns.
+func startPeer(t *testing.T, id *identity.Identity) (*transport.Listener, chan *transport.Conn) {
 	t.Helper()
 	ln, err := transport.Listen("127.0.0.1:0", id)
 	if err != nil {
@@ -66,29 +75,22 @@ func startPeer(t *testing.T, id *identity.Identity) (addr string, conns chan *tr
 			ch <- conn
 		}
 	}()
-	return ln.Addr().String(), ch
-}
-
-func listenPort(addr string) uint32 {
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
-	if err != nil {
-		return 0
-	}
-	return uint32(tcpAddr.Port)
+	return ln, ch
 }
 
 func TestDial_Direct(t *testing.T) {
-	idA, _ := identity.Generate()
-	idB, _ := identity.Generate()
+	idA := mustGenID(t)
+	idB := mustGenID(t)
 
-	bAddr, bConns := startPeer(t, idB)
+	lnA, _ := startPeer(t, idA)
+	lnB, bConns := startPeer(t, idB)
 
-	d := &connmgr.Dialer{ID: idA, LocalPort: 0}
+	d := &connmgr.Dialer{ID: idA, Listener: lnA}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, err := d.Dial(ctx, idB.NodeID, []string{bAddr})
+	conn, err := d.Dial(ctx, idB.NodeID, []string{lnB.Addr().String()})
 	if err != nil {
 		t.Fatalf("Dial direct: %v", err)
 	}
@@ -107,8 +109,9 @@ func TestDial_Direct(t *testing.T) {
 }
 
 func TestDial_NoEndpoints_ReturnsNoRoute(t *testing.T) {
-	idA, _ := identity.Generate()
-	d := &connmgr.Dialer{ID: idA, LocalPort: 0}
+	idA := mustGenID(t)
+	lnA, _ := startPeer(t, idA)
+	d := &connmgr.Dialer{ID: idA, Listener: lnA}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -120,20 +123,17 @@ func TestDial_NoEndpoints_ReturnsNoRoute(t *testing.T) {
 }
 
 func TestDial_ViaRelay(t *testing.T) {
-	idA, _ := identity.Generate()
-	idB, _ := identity.Generate()
+	idA := mustGenID(t)
+	idB := mustGenID(t)
 
 	relayAddr := startRelay(t)
 
-	// B starts a listener (A will connect to it after the punch).
-	bAddr, bConns := startPeer(t, idB)
-	bPort := listenPort(bAddr)
+	lnB, bConns := startPeer(t, idB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// B registers with relay and watches for incoming rendezvous.
-	bRelay, err := relay.Connect(ctx, relayAddr, idB, bPort)
+	bRelay, err := relay.Connect(ctx, relayAddr, idB, uint32(lnB.Port()))
 	if err != nil {
 		t.Fatalf("B relay connect: %v", err)
 	}
@@ -146,10 +146,8 @@ func TestDial_ViaRelay(t *testing.T) {
 			go func() {
 				dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer cancel()
-				conn, err := transport.Dial(rv.PeerExternalAddr, idB, rv.PeerNodeID)
+				conn, err := lnB.Dial(dialCtx, rv.PeerExternalAddr, rv.PeerNodeID)
 				if err != nil {
-					_ = err // punch may fail on loopback; OK
-					_ = dialCtx
 					return
 				}
 				bConns <- conn
@@ -157,11 +155,8 @@ func TestDial_ViaRelay(t *testing.T) {
 		}
 	}()
 
-	// A starts a listener to receive the return punch from B.
-	aAddr, aConns := startPeer(t, idA)
-	aPort := listenPort(aAddr)
-
-	d := &connmgr.Dialer{ID: idA, LocalPort: aPort}
+	lnA, aConns := startPeer(t, idA)
+	d := &connmgr.Dialer{ID: idA, Listener: lnA}
 
 	// A dials B with a bad direct endpoint followed by a relay endpoint.
 	endpoints := []string{
@@ -192,16 +187,13 @@ func TestDial_ViaRelay(t *testing.T) {
 }
 
 func TestServePunch(t *testing.T) {
-	idA, _ := identity.Generate()
-	idB, _ := identity.Generate()
+	idA := mustGenID(t)
+	idB := mustGenID(t)
 
 	relayAddr := startRelay(t)
 
-	// A starts a transport listener and registers with relay via ServePunch.
-	// B will punch to A's external addr (= A's listener addr on loopback).
-	aAddr, aConns := startPeer(t, idA)
-	aPort := listenPort(aAddr)
-	dA := &connmgr.Dialer{ID: idA, LocalPort: aPort}
+	lnA, aConns := startPeer(t, idA)
+	dA := &connmgr.Dialer{ID: idA, Listener: lnA}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -211,10 +203,8 @@ func TestServePunch(t *testing.T) {
 	// Give ServePunch time to register with relay.
 	time.Sleep(150 * time.Millisecond)
 
-	// B dials A via relay (direct endpoint is absent, so relay path is used).
-	bAddr, _ := startPeer(t, idB)
-	bPort := listenPort(bAddr)
-	dB := &connmgr.Dialer{ID: idB, LocalPort: bPort}
+	lnB, _ := startPeer(t, idB)
+	dB := &connmgr.Dialer{ID: idB, Listener: lnB}
 
 	conn, err := dB.Dial(ctx, idA.NodeID, []string{"relay://" + relayAddr})
 	if err != nil {

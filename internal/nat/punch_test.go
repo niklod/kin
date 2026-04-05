@@ -3,7 +3,6 @@ package nat_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -13,13 +12,20 @@ import (
 	"github.com/niklod/kin/internal/transport"
 )
 
-// startListener starts a transport.Listener on a random port and returns its
-// address plus a channel that produces the first accepted Conn.
-func startListener(t *testing.T, id *identity.Identity) (addr string, conns <-chan *transport.Conn) {
+func mustGenID(t *testing.T) *identity.Identity {
+	t.Helper()
+	id, err := identity.Generate()
+	if err != nil {
+		t.Fatalf("identity.Generate: %v", err)
+	}
+	return id
+}
+
+func startListener(t *testing.T, id *identity.Identity) (*transport.Listener, <-chan *transport.Conn) {
 	t.Helper()
 	ln, err := transport.Listen("127.0.0.1:0", id)
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		t.Fatalf("transport.Listen: %v", err)
 	}
 	t.Cleanup(func() { ln.Close() })
 
@@ -31,20 +37,20 @@ func startListener(t *testing.T, id *identity.Identity) (addr string, conns <-ch
 		}
 		ch <- conn
 	}()
-	return ln.Addr().String(), ch
+	return ln, ch
 }
 
 func TestPunch_ConnectsAndAuthenticated(t *testing.T) {
-	idA, _ := identity.Generate()
-	idB, _ := identity.Generate()
+	idA := mustGenID(t)
+	idB := mustGenID(t)
 
-	// B listens; A punches to B with localPort=0 (OS picks).
-	bAddr, bConns := startListener(t, idB)
+	lnA, _ := startListener(t, idA)
+	lnB, bConns := startListener(t, idB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	connA, err := nat.Punch(ctx, 0, bAddr, idA, idB.NodeID)
+	connA, err := nat.Punch(ctx, lnA, lnB.Addr().String(), idB.NodeID)
 	if err != nil {
 		t.Fatalf("Punch: %v", err)
 	}
@@ -66,16 +72,17 @@ func TestPunch_ConnectsAndAuthenticated(t *testing.T) {
 }
 
 func TestPunch_WrongNodeIDRejected(t *testing.T) {
-	idA, _ := identity.Generate()
-	idB, _ := identity.Generate()
-	wrong, _ := identity.Generate()
+	idA := mustGenID(t)
+	idB := mustGenID(t)
+	wrong := mustGenID(t)
 
-	bAddr, _ := startListener(t, idB)
+	lnA, _ := startListener(t, idA)
+	lnB, _ := startListener(t, idB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := nat.Punch(ctx, 0, bAddr, idA, wrong.NodeID)
+	_, err := nat.Punch(ctx, lnA, lnB.Addr().String(), wrong.NodeID)
 	if err == nil {
 		t.Fatal("expected error for wrong NodeID, got nil")
 	}
@@ -85,13 +92,15 @@ func TestPunch_WrongNodeIDRejected(t *testing.T) {
 }
 
 func TestPunch_ContextCancelled(t *testing.T) {
-	idA, _ := identity.Generate()
+	idA := mustGenID(t)
+
+	lnA, _ := startListener(t, idA)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	// Dial a port with no listener — will fail quickly with connection refused.
-	_, err := nat.Punch(ctx, 0, "127.0.0.1:19999", idA, [32]byte{})
+	// Dial a port with no listener — will fail quickly or on context expiry.
+	_, err := nat.Punch(ctx, lnA, "127.0.0.1:19999", [32]byte{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -100,35 +109,21 @@ func TestPunch_ContextCancelled(t *testing.T) {
 	}
 }
 
-func TestPunch_ReusePort_WithExistingListener(t *testing.T) {
-	idA, _ := identity.Generate()
-	idB, _ := identity.Generate()
+// TestPunch_ViaSharedListener verifies that an active listener can also dial
+// outbound via Punch — the same UDP socket handles both roles without conflict.
+func TestPunch_ViaSharedListener(t *testing.T) {
+	idA := mustGenID(t)
+	idB := mustGenID(t)
 
-	// A starts a listener so we can discover its address, then keeps it open.
-	lnA, err := transport.Listen("127.0.0.1:0", idA)
-	if err != nil {
-		t.Fatalf("listen A: %v", err)
-	}
-	defer lnA.Close()
-
-	_, portStr, err := net.SplitHostPort(lnA.Addr().String())
-	if err != nil {
-		t.Fatalf("split host port: %v", err)
-	}
-	var localPort int
-	if _, err := fmt.Sscanf(portStr, "%d", &localPort); err != nil {
-		t.Fatalf("parse port: %v", err)
-	}
-
-	bAddr, bConns := startListener(t, idB)
+	lnA, _ := startListener(t, idA)
+	lnB, bConns := startListener(t, idB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// A punches from its listen port to B (SO_REUSEPORT lets both sockets share the port).
-	connA, err := nat.Punch(ctx, uint32(localPort), bAddr, idA, idB.NodeID)
+	connA, err := nat.Punch(ctx, lnA, lnB.Addr().String(), idB.NodeID)
 	if err != nil {
-		t.Fatalf("Punch from listen port %d: %v", localPort, err)
+		t.Fatalf("Punch from shared listener: %v", err)
 	}
 	defer connA.Close()
 
@@ -137,5 +132,38 @@ func TestPunch_ReusePort_WithExistingListener(t *testing.T) {
 		connB.Close()
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for B to accept")
+	}
+}
+
+func TestPrimeNAT_BurstSent(t *testing.T) {
+	idA := mustGenID(t)
+	lnA, _ := startListener(t, idA)
+
+	udpConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ListenPacket: %v", err)
+	}
+	defer udpConn.Close()
+
+	count := make(chan int, 1)
+	go func() {
+		var n int
+		buf := make([]byte, 64)
+		_ = udpConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		for {
+			_, _, err := udpConn.ReadFrom(buf)
+			if err != nil {
+				break
+			}
+			n++
+		}
+		count <- n
+	}()
+
+	nat.PrimeNAT(context.Background(), lnA, udpConn.LocalAddr().String())
+
+	received := <-count
+	if received != 5 {
+		t.Errorf("PrimeNAT sent %d packets, want 5", received)
 	}
 }

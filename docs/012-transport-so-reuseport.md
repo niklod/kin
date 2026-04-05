@@ -1,3 +1,8 @@
+> **SUPERSEDED** — SO_REUSEPORT was removed when the transport migrated to QUIC (UDP).
+> `quic.Transport` owns the single UDP socket for both listening and dialing, making
+> SO_REUSEPORT unnecessary (and harmful — it would split datagrams non-deterministically).
+> See `docs/014-quic-shared-transport.md`.
+
 # Decision 012: SO_REUSEPORT on the Transport Listener
 
 **Date:** 2026-04-04
