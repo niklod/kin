@@ -45,11 +45,10 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// OpenReadOnly opens the database in read-only mode, which does not acquire
-// an exclusive lock and can run concurrently with a running kin process.
-// The database file must already exist (created by a prior Open call).
+// OpenReadOnly opens the database in read-only mode with a short timeout.
+// Returns an error (instead of blocking) if another process holds the write lock.
 func OpenReadOnly(path string) (*Store, error) {
-	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: true})
+	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: true, Timeout: 500 * time.Millisecond})
 	if err != nil {
 		return nil, fmt.Errorf("open peerstore: %w", err)
 	}

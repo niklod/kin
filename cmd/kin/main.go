@@ -262,15 +262,19 @@ func cmdJoin(cfgDir, rawToken, listenAddr string) {
 
 func cmdStatus(cfgDir string) {
 	id := mustLoadOrGenerate(cfgDir)
-	store := mustOpenStoreReadOnly(cfgDir)
+	fmt.Printf("NodeID: %s\n", id.NodeIDHex())
+
+	store, err := peerstore.OpenReadOnly(filepath.Join(cfgDir, "peers.db"))
+	if err != nil {
+		fmt.Printf("Peers:  (unavailable while kin run is active)\n")
+		return
+	}
 	defer store.Close()
 
 	peers, err := store.ListPeers()
 	if err != nil {
 		fatalf("list peers: %v", err)
 	}
-
-	fmt.Printf("NodeID: %s\n", id.NodeIDHex())
 	fmt.Printf("Peers:  %d\n", len(peers))
 	for _, p := range peers {
 		fmt.Printf("  %x  %s  %s\n", p.NodeID[:8], p.TrustState, p.LastSeen.Format("2006-01-02 15:04:05"))
@@ -293,13 +297,6 @@ func mustOpenStore(cfgDir string) *peerstore.Store {
 	return s
 }
 
-func mustOpenStoreReadOnly(cfgDir string) *peerstore.Store {
-	s, err := peerstore.OpenReadOnly(filepath.Join(cfgDir, "peers.db"))
-	if err != nil {
-		fatalf("peerstore: %v", err)
-	}
-	return s
-}
 
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "kin: "+format+"\n", args...)
