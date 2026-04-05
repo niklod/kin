@@ -2,8 +2,7 @@ services:
   relay:
     build: .
     restart: unless-stopped
-    ports:
-      - "7778:7778"
+    network_mode: host
     volumes:
       - relay-data:/data
     # Override listen address or config dir if needed:

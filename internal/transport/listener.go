@@ -125,6 +125,36 @@ func (l *Listener) Prime(peerAddr string) error {
 	return nil
 }
 
+// DiscoverExternalAddr sends a UDP discovery packet to relayAddr and reads the
+// echoed source address to determine the actual external UDP endpoint as seen
+// by the relay. This is necessary when the local NAT remaps the source port.
+// Returns the external "ip:port" string on success.
+func (l *Listener) DiscoverExternalAddr(ctx context.Context, relayAddr string) (string, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", relayAddr)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", relayAddr, err)
+	}
+	// Send a few discovery packets in case of UDP loss.
+	// First byte 0x00 is never a valid QUIC packet header, so quic-go routes
+	// this to ReadNonQUICPacket instead of treating it as a QUIC datagram.
+	for range 3 {
+		if _, err := l.qTransport.WriteTo([]byte{0x00}, udpAddr); err != nil {
+			return "", fmt.Errorf("send discovery: %w", err)
+		}
+	}
+	buf := make([]byte, 64)
+	for {
+		n, from, err := l.qTransport.ReadNonQUICPacket(ctx, buf)
+		if err != nil {
+			return "", fmt.Errorf("read discovery response: %w", err)
+		}
+		fromUDP, ok := from.(*net.UDPAddr)
+		if ok && fromUDP.IP.Equal(udpAddr.IP) && fromUDP.Port == udpAddr.Port {
+			return string(buf[:n]), nil
+		}
+	}
+}
+
 // Addr returns the listener's local UDP address.
 func (l *Listener) Addr() net.Addr {
 	return l.udpConn.LocalAddr()

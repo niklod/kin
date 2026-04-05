@@ -23,7 +23,7 @@ func (d *Dialer) ServePunch(ctx context.Context, relayAddr string, logger *slog.
 		logger = slog.Default()
 	}
 
-	rc, err := relay.Connect(ctx, relayAddr, d.ID, uint32(d.Listener.Port()))
+	rc, err := relay.Connect(ctx, relayAddr, d.ID, externalPort(ctx, relayAddr, d.Listener))
 	if err != nil {
 		return fmt.Errorf("relay connect: %w", err)
 	}

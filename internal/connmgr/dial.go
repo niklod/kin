@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,7 +78,7 @@ func (d *Dialer) Dial(ctx context.Context, peerNodeID [32]byte, endpoints []stri
 
 func (d *Dialer) punchViaRelay(ctx context.Context, peerNodeID [32]byte, relayAddr string) (*transport.Conn, error) {
 	slog.Debug("connmgr: connecting to relay", "relay", relayAddr)
-	rc, err := relay.Connect(ctx, relayAddr, d.ID, uint32(d.Listener.Port()))
+	rc, err := relay.Connect(ctx, relayAddr, d.ID, externalPort(ctx, relayAddr, d.Listener))
 	if err != nil {
 		return nil, fmt.Errorf("relay %s: %w", relayAddr, err)
 	}
@@ -106,6 +108,31 @@ func (d *Dialer) punchViaRelay(ctx context.Context, peerNodeID [32]byte, relayAd
 
 	slog.Debug("connmgr: punch succeeded", "peer_addr", rv.PeerExternalAddr)
 	return conn, nil
+}
+
+// externalPort discovers the actual external UDP port as seen by the relay by
+// sending a discovery packet and reading the echoed source address. Falls back
+// to the listener's local port on any error.
+func externalPort(ctx context.Context, relayAddr string, ln *transport.Listener) uint32 {
+	discCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	ext, err := ln.DiscoverExternalAddr(discCtx, relayAddr)
+	if err != nil {
+		slog.Debug("connmgr: external port discovery failed, using local port",
+			"relay", relayAddr, "err", err)
+		return uint32(ln.Port())
+	}
+	_, portStr, err := net.SplitHostPort(ext)
+	if err != nil {
+		return uint32(ln.Port())
+	}
+	p, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil || p == 0 {
+		return uint32(ln.Port())
+	}
+	slog.Debug("connmgr: discovered external port", "relay", relayAddr, "port", p)
+	return uint32(p)
 }
 
 // tryEach iterates addrs, calls try for each, and returns the first successful

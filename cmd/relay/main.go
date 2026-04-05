@@ -58,6 +58,17 @@ func main() {
 	}
 	defer ln.Close()
 
+	udpAddr, err := net.ResolveUDPAddr("udp", *listenAddr)
+	if err != nil {
+		fatalf("resolve udp listen addr: %v", err)
+	}
+	udpLn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		fatalf("udp listen: %v", err)
+	}
+	defer udpLn.Close()
+	go serveUDPEcho(udpLn)
+
 	srv := relay.NewServer(slog.Default())
 
 	fmt.Printf("relay running\n")
@@ -86,6 +97,20 @@ func main() {
 
 	<-stop
 	fmt.Println("\nshutting down")
+}
+
+// serveUDPEcho replies to every UDP datagram with the sender's address as a
+// plain string. Clients use this to discover their NAT-mapped external UDP
+// port before registering with the relay.
+func serveUDPEcho(conn *net.UDPConn) {
+	buf := make([]byte, 128)
+	for {
+		_, addr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+		conn.WriteToUDP([]byte(addr.String()), addr) //nolint:errcheck
+	}
 }
 
 func remoteIP(conn net.Conn) string {
