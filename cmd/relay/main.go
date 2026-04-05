@@ -27,7 +27,14 @@ import (
 func main() {
 	listenAddr := flag.String("listen", "0.0.0.0:7778", "relay listen address")
 	configDir := flag.String("config-dir", "", "config directory for relay identity")
+	debug := flag.Bool("debug", false, "enable verbose debug logging")
 	flag.Parse()
+
+	if *debug {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})))
+	}
 
 	cfgDir, err := resolveConfigDir(*configDir)
 	if err != nil {
@@ -109,6 +116,7 @@ func serveUDPEcho(conn *net.UDPConn) {
 		if err != nil {
 			return
 		}
+		slog.Debug("relay: udp echo", "from", addr.String())
 		conn.WriteToUDP([]byte(addr.String()), addr) //nolint:errcheck
 	}
 }

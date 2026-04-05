@@ -23,13 +23,18 @@ func (d *Dialer) ServePunch(ctx context.Context, relayAddr string, logger *slog.
 		logger = slog.Default()
 	}
 
-	rc, err := relay.Connect(ctx, relayAddr, d.ID, externalPort(ctx, relayAddr, d.Listener))
+	port := externalPort(ctx, relayAddr, d.Listener)
+	rc, err := relay.Connect(ctx, relayAddr, d.ID, port)
 	if err != nil {
 		return fmt.Errorf("relay connect: %w", err)
 	}
 	defer rc.Close()
 
-	logger.Info("connmgr: relay registered", "addr", relayAddr, "external", rc.ExternalAddr())
+	logger.Info("connmgr: relay registered",
+		"addr", relayAddr,
+		"external", rc.ExternalAddr(),
+		"local_port", d.Listener.Port(),
+		"nat_port", port)
 
 	for {
 		select {
