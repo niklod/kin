@@ -25,8 +25,10 @@ type Store struct {
 }
 
 // Open opens (or creates) the bbolt database at the given path.
+// Returns an error if the file lock cannot be acquired within 3 seconds
+// (e.g. another kin process is already running with the same config dir).
 func Open(path string) (*Store, error) {
-	db, err := bolt.Open(path, 0600, nil)
+	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 3 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("open peerstore: %w", err)
 	}

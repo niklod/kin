@@ -174,8 +174,6 @@ func cmdRun(cfgDir, listenAddr, relayAddr string) {
 
 func cmdInvite(cfgDir, listenAddr, relayAddr string) {
 	id := mustLoadOrGenerate(cfgDir)
-	store := mustOpenStore(cfgDir)
-	defer store.Close()
 
 	var endpoints []string
 	if host, _, err := net.SplitHostPort(listenAddr); err == nil && host != "0.0.0.0" && host != "" {
