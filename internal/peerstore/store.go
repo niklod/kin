@@ -39,8 +39,19 @@ func Open(path string) (*Store, error) {
 		_, err := tx.CreateBucketIfNotExists([]byte(bucketNameNonces))
 		return err
 	}); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init buckets: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// OpenReadOnly opens the database in read-only mode, which does not acquire
+// an exclusive lock and can run concurrently with a running kin process.
+// The database file must already exist (created by a prior Open call).
+func OpenReadOnly(path string) (*Store, error) {
+	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("open peerstore: %w", err)
 	}
 	return &Store{db: db}, nil
 }

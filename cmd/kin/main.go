@@ -262,7 +262,7 @@ func cmdJoin(cfgDir, rawToken, listenAddr string) {
 
 func cmdStatus(cfgDir string) {
 	id := mustLoadOrGenerate(cfgDir)
-	store := mustOpenStore(cfgDir)
+	store := mustOpenStoreReadOnly(cfgDir)
 	defer store.Close()
 
 	peers, err := store.ListPeers()
@@ -287,6 +287,14 @@ func mustLoadOrGenerate(cfgDir string) *identity.Identity {
 
 func mustOpenStore(cfgDir string) *peerstore.Store {
 	s, err := peerstore.Open(filepath.Join(cfgDir, "peers.db"))
+	if err != nil {
+		fatalf("peerstore: %v", err)
+	}
+	return s
+}
+
+func mustOpenStoreReadOnly(cfgDir string) *peerstore.Store {
+	s, err := peerstore.OpenReadOnly(filepath.Join(cfgDir, "peers.db"))
 	if err != nil {
 		fatalf("peerstore: %v", err)
 	}
