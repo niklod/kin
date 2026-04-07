@@ -38,6 +38,7 @@ const defaultListenAddr = "0.0.0.0:7777"
 
 func main() {
 	configDir := flag.String("config-dir", "", "override config directory")
+	sharedDir := flag.String("shared-dir", "", "override shared folder directory")
 	listenAddr := flag.String("listen", defaultListenAddr, "address to listen on")
 	relayAddr := flag.String("relay", "", "relay server address (host:port) for NAT traversal")
 	debug := flag.Bool("debug", false, "enable verbose debug logging")
@@ -62,7 +63,7 @@ func main() {
 
 	switch args[0] {
 	case "run":
-		cmdRun(cfgDir, *listenAddr, *relayAddr)
+		cmdRun(cfgDir, *sharedDir, *listenAddr, *relayAddr)
 	case "invite":
 		cmdInvite(cfgDir, *listenAddr, *relayAddr)
 	case "join":
@@ -85,12 +86,19 @@ func resolveConfigDir(override string) (string, error) {
 	return config.DefaultConfigDir()
 }
 
-func cmdRun(cfgDir, listenAddr, relayAddr string) {
+func resolveSharedDir(override string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	return config.DefaultSharedDir()
+}
+
+func cmdRun(cfgDir, sharedDirOverride, listenAddr, relayAddr string) {
 	id := mustLoadOrGenerate(cfgDir)
 	store := mustOpenStore(cfgDir)
 	defer store.Close()
 
-	sharedDir, err := config.DefaultSharedDir()
+	sharedDir, err := resolveSharedDir(sharedDirOverride)
 	if err != nil {
 		fatalf("shared dir: %v", err)
 	}

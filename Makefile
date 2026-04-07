@@ -1,4 +1,4 @@
-.PHONY: build test lint generate clean
+.PHONY: build test test-e2e lint generate clean
 
 BINARY := bin/kin
 GO := go
@@ -9,6 +9,9 @@ build:
 
 test:
 	$(GO) test -race -cover ./...
+
+test-e2e:
+	$(GO) test -tags e2e -race -timeout 120s -v ./e2e/...
 
 lint:
 	golangci-lint run ./...
