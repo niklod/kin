@@ -33,9 +33,10 @@ func MustMkdir(t *testing.T, path string) {
 // MemConn is an in-memory bidirectional message pipe for testing.
 // It satisfies the MsgReadWriter, MsgWriter, and protocol.Conn interfaces.
 type MemConn struct {
-	send chan *kinpb.Envelope
-	recv chan *kinpb.Envelope
-	addr string
+	send       chan *kinpb.Envelope
+	recv       chan *kinpb.Envelope
+	addr       string
+	peerNodeID [32]byte
 }
 
 // NewMemConnPair returns two connected MemConns.
@@ -45,6 +46,15 @@ func NewMemConnPair(addr string, bufSize int) (a, b *MemConn) {
 	ch2 := make(chan *kinpb.Envelope, bufSize)
 	return &MemConn{send: ch1, recv: ch2, addr: addr},
 		&MemConn{send: ch2, recv: ch1, addr: addr}
+}
+
+// NewMemConnPairWithIDs returns two connected MemConns with peer NodeIDs set.
+// Each side sees the other's NodeID.
+func NewMemConnPairWithIDs(addr string, bufSize int, aID, bID [32]byte) (a, b *MemConn) {
+	ch1 := make(chan *kinpb.Envelope, bufSize)
+	ch2 := make(chan *kinpb.Envelope, bufSize)
+	return &MemConn{send: ch1, recv: ch2, addr: addr, peerNodeID: bID},
+		&MemConn{send: ch2, recv: ch1, addr: addr, peerNodeID: aID}
 }
 
 // Send puts env onto the outgoing channel.
@@ -64,6 +74,9 @@ func (m *MemConn) Recv() (*kinpb.Envelope, error) {
 
 // RemoteAddr returns the address string provided at construction.
 func (m *MemConn) RemoteAddr() string { return m.addr }
+
+// PeerID returns the peer's NodeID.
+func (m *MemConn) PeerID() [32]byte { return m.peerNodeID }
 
 // CloseRecv closes the receive channel, causing subsequent Recv calls to return io.EOF.
 func (m *MemConn) CloseRecv() { close(m.recv) }
@@ -95,6 +108,7 @@ var _ interface {
 	Send(*kinpb.Envelope) error
 	Recv() (*kinpb.Envelope, error)
 	RemoteAddr() string
+	PeerID() [32]byte
 } = (*MemConn)(nil)
 
 // Logf wraps t.Logf with a prefix — convenience for verbose test logging.

@@ -77,3 +77,8 @@ func (c *Conn) Close() error {
 func (c *Conn) RemoteAddr() string {
 	return c.qConn.RemoteAddr().String()
 }
+
+// PeerID returns the authenticated peer's NodeID.
+func (c *Conn) PeerID() [32]byte {
+	return c.PeerNodeID
+}

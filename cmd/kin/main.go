@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/niklod/kin/internal/catalog"
 	"github.com/niklod/kin/internal/config"
 	"github.com/niklod/kin/internal/connmgr"
 	"github.com/niklod/kin/internal/identity"
@@ -29,6 +30,8 @@ import (
 	"github.com/niklod/kin/internal/protocol"
 	"github.com/niklod/kin/internal/transfer"
 	"github.com/niklod/kin/internal/transport"
+	"github.com/niklod/kin/internal/watcher"
+	"github.com/niklod/kin/kinpb"
 )
 
 const defaultListenAddr = "0.0.0.0:7777"
@@ -95,13 +98,16 @@ func cmdRun(cfgDir, listenAddr, relayAddr string) {
 		fatalf("create shared dir: %v", err)
 	}
 
+	cat := mustOpenCatalog(cfgDir, id.NodeID)
+	defer cat.Close()
+
 	idx := transfer.NewLocalIndex()
 	if err := idx.Scan(sharedDir); err != nil {
 		slog.Warn("scan shared dir", "err", err)
 	}
 
 	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, slog.Default())
+	handler := protocol.NewHandler(sender, cat, id.NodeID, slog.Default())
 
 	ln, err := transport.Listen(listenAddr, id)
 	if err != nil {
@@ -119,6 +125,14 @@ func cmdRun(cfgDir, listenAddr, relayAddr string) {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// Start file watcher for the shared folder.
+	go func() {
+		w := watcher.New(sharedDir, cat, idx, slog.Default())
+		if err := w.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("watcher", "err", err)
+		}
+	}()
 
 	// Accept incoming connections from the transport listener.
 	go func() {
@@ -257,6 +271,11 @@ func cmdJoin(cfgDir, rawToken, listenAddr string) {
 		slog.Warn("put peer", "err", err)
 	}
 
+	// Exchange catalogs with the peer.
+	cat := mustOpenCatalog(cfgDir, id.NodeID)
+	defer cat.Close()
+	exchangeCatalog(cat, conn, peerID)
+
 	fmt.Printf("connected to %x\n", peerID[:8])
 }
 
@@ -281,6 +300,82 @@ func cmdStatus(cfgDir string) {
 	}
 }
 
+// exchangeCatalog sends our catalog to the peer and receives theirs.
+func exchangeCatalog(cat *catalog.Store, conn *transport.Conn, peerID [32]byte) {
+	if err := sendCatalogOffer(cat, conn, peerID); err != nil {
+		slog.Warn("send catalog offer", "err", err)
+		return
+	}
+	receivePeerCatalog(cat, conn, peerID)
+}
+
+func sendCatalogOffer(cat *catalog.Store, conn *transport.Conn, peerID [32]byte) error {
+	entries, err := cat.ListForPeer(peerID)
+	if err != nil {
+		return fmt.Errorf("list for peer: %w", err)
+	}
+
+	files := catalog.EntriesToProto(entries)
+	slog.Debug("sent catalog offer", "files", len(files))
+	return conn.Send(&kinpb.Envelope{
+		Payload: &kinpb.Envelope_CatalogOffer{
+			CatalogOffer: &kinpb.CatalogOffer{Files: files},
+		},
+	})
+}
+
+func receivePeerCatalog(cat *catalog.Store, conn *transport.Conn, peerID [32]byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for {
+		if ctx.Err() != nil {
+			slog.Debug("catalog exchange timeout")
+			return
+		}
+		env, err := conn.Recv()
+		if err != nil {
+			slog.Debug("catalog exchange recv", "err", err)
+			return
+		}
+		switch p := env.Payload.(type) {
+		case *kinpb.Envelope_CatalogOffer:
+			handleReceivedOffer(cat, conn, peerID, p.CatalogOffer)
+			return
+		case *kinpb.Envelope_CatalogAck:
+			slog.Debug("catalog ack", "count", p.CatalogAck.ReceivedCount)
+		default:
+			slog.Debug("unexpected message during catalog exchange", "type", fmt.Sprintf("%T", env.Payload))
+			return
+		}
+	}
+}
+
+func handleReceivedOffer(cat *catalog.Store, conn *transport.Conn, peerID [32]byte, offer *kinpb.CatalogOffer) {
+	entries := make([]*catalog.Entry, 0, len(offer.Files))
+	for _, f := range offer.Files {
+		e, err := catalog.ProtoToEntry(f)
+		if err != nil {
+			slog.Debug("skip bad catalog entry", "err", err)
+			continue
+		}
+		entries = append(entries, e)
+	}
+
+	if err := cat.PutPeerEntries(peerID, entries); err != nil {
+		slog.Warn("save peer catalog", "err", err)
+	}
+	slog.Debug("received peer catalog", "entries", len(entries))
+
+	if err := conn.Send(&kinpb.Envelope{
+		Payload: &kinpb.Envelope_CatalogAck{
+			CatalogAck: &kinpb.CatalogAck{ReceivedCount: uint32(len(entries))}, //nolint:gosec
+		},
+	}); err != nil {
+		slog.Warn("send catalog ack", "err", err)
+	}
+}
+
 func mustLoadOrGenerate(cfgDir string) *identity.Identity {
 	id, err := identity.LoadOrGenerate(cfgDir)
 	if err != nil {
@@ -297,6 +392,13 @@ func mustOpenStore(cfgDir string) *peerstore.Store {
 	return s
 }
 
+func mustOpenCatalog(cfgDir string, selfID [32]byte) *catalog.Store {
+	s, err := catalog.Open(filepath.Join(cfgDir, "catalog.db"), selfID)
+	if err != nil {
+		fatalf("catalog: %v", err)
+	}
+	return s
+}
 
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "kin: "+format+"\n", args...)

@@ -35,6 +35,8 @@ type Envelope struct {
 	//	*Envelope_RelayConnect
 	//	*Envelope_RelayRendezvous
 	//	*Envelope_RelayError
+	//	*Envelope_CatalogOffer
+	//	*Envelope_CatalogAck
 	//	*Envelope_Error
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
@@ -168,6 +170,24 @@ func (x *Envelope) GetRelayError() *RelayError {
 	return nil
 }
 
+func (x *Envelope) GetCatalogOffer() *CatalogOffer {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_CatalogOffer); ok {
+			return x.CatalogOffer
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetCatalogAck() *CatalogAck {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_CatalogAck); ok {
+			return x.CatalogAck
+		}
+	}
+	return nil
+}
+
 func (x *Envelope) GetError() *Error {
 	if x != nil {
 		if x, ok := x.Payload.(*Envelope_Error); ok {
@@ -222,6 +242,15 @@ type Envelope_RelayError struct {
 	RelayError *RelayError `protobuf:"bytes,10,opt,name=relay_error,json=relayError,proto3,oneof"`
 }
 
+type Envelope_CatalogOffer struct {
+	// Catalog exchange messages (11–12)
+	CatalogOffer *CatalogOffer `protobuf:"bytes,11,opt,name=catalog_offer,json=catalogOffer,proto3,oneof"`
+}
+
+type Envelope_CatalogAck struct {
+	CatalogAck *CatalogAck `protobuf:"bytes,12,opt,name=catalog_ack,json=catalogAck,proto3,oneof"`
+}
+
 type Envelope_Error struct {
 	Error *Error `protobuf:"bytes,15,opt,name=error,proto3,oneof"`
 }
@@ -245,6 +274,10 @@ func (*Envelope_RelayConnect) isEnvelope_Payload() {}
 func (*Envelope_RelayRendezvous) isEnvelope_Payload() {}
 
 func (*Envelope_RelayError) isEnvelope_Payload() {}
+
+func (*Envelope_CatalogOffer) isEnvelope_Payload() {}
+
+func (*Envelope_CatalogAck) isEnvelope_Payload() {}
 
 func (*Envelope_Error) isEnvelope_Payload() {}
 
@@ -825,11 +858,186 @@ func (x *RelayError) GetReason() string {
 	return ""
 }
 
+// A single file catalog entry sent between peers.
+type CatalogFile struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FileId        []byte                 `protobuf:"bytes,1,opt,name=file_id,json=fileId,proto3" json:"file_id,omitempty"`                   // 32-byte SHA-256
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                                     // original filename (base name)
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`                                    // file size in bytes
+	ModTimeUnix   int64                  `protobuf:"varint,4,opt,name=mod_time_unix,json=modTimeUnix,proto3" json:"mod_time_unix,omitempty"` // modification time, unix seconds
+	OwnerNodeId   []byte                 `protobuf:"bytes,5,opt,name=owner_node_id,json=ownerNodeId,proto3" json:"owner_node_id,omitempty"`  // 32-byte NodeID of file owner
+	Deleted       bool                   `protobuf:"varint,6,opt,name=deleted,proto3" json:"deleted,omitempty"`                              // tombstone
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CatalogFile) Reset() {
+	*x = CatalogFile{}
+	mi := &file_kin_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CatalogFile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CatalogFile) ProtoMessage() {}
+
+func (x *CatalogFile) ProtoReflect() protoreflect.Message {
+	mi := &file_kin_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CatalogFile.ProtoReflect.Descriptor instead.
+func (*CatalogFile) Descriptor() ([]byte, []int) {
+	return file_kin_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CatalogFile) GetFileId() []byte {
+	if x != nil {
+		return x.FileId
+	}
+	return nil
+}
+
+func (x *CatalogFile) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CatalogFile) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *CatalogFile) GetModTimeUnix() int64 {
+	if x != nil {
+		return x.ModTimeUnix
+	}
+	return 0
+}
+
+func (x *CatalogFile) GetOwnerNodeId() []byte {
+	if x != nil {
+		return x.OwnerNodeId
+	}
+	return nil
+}
+
+func (x *CatalogFile) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
+}
+
+// Node → Peer: offer this node's full catalog.
+type CatalogOffer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Files         []*CatalogFile         `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CatalogOffer) Reset() {
+	*x = CatalogOffer{}
+	mi := &file_kin_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CatalogOffer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CatalogOffer) ProtoMessage() {}
+
+func (x *CatalogOffer) ProtoReflect() protoreflect.Message {
+	mi := &file_kin_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CatalogOffer.ProtoReflect.Descriptor instead.
+func (*CatalogOffer) Descriptor() ([]byte, []int) {
+	return file_kin_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CatalogOffer) GetFiles() []*CatalogFile {
+	if x != nil {
+		return x.Files
+	}
+	return nil
+}
+
+// Peer → Node: acknowledge catalog receipt.
+type CatalogAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ReceivedCount uint32                 `protobuf:"varint,1,opt,name=received_count,json=receivedCount,proto3" json:"received_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CatalogAck) Reset() {
+	*x = CatalogAck{}
+	mi := &file_kin_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CatalogAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CatalogAck) ProtoMessage() {}
+
+func (x *CatalogAck) ProtoReflect() protoreflect.Message {
+	mi := &file_kin_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CatalogAck.ProtoReflect.Descriptor instead.
+func (*CatalogAck) Descriptor() ([]byte, []int) {
+	return file_kin_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *CatalogAck) GetReceivedCount() uint32 {
+	if x != nil {
+		return x.ReceivedCount
+	}
+	return 0
+}
+
 var File_kin_proto protoreflect.FileDescriptor
 
 const file_kin_proto_rawDesc = "" +
 	"\n" +
-	"\tkin.proto\x12\x03kin\"\xf6\x04\n" +
+	"\tkin.proto\x12\x03kin\"\xe4\x05\n" +
 	"\bEnvelope\x12.\n" +
 	"\thandshake\x18\x01 \x01(\v2\x0e.kin.HandshakeH\x00R\thandshake\x128\n" +
 	"\rhandshake_ack\x18\x02 \x01(\v2\x11.kin.HandshakeAckH\x00R\fhandshakeAck\x125\n" +
@@ -843,7 +1051,10 @@ const file_kin_proto_rawDesc = "" +
 	"\x10relay_rendezvous\x18\t \x01(\v2\x14.kin.RelayRendezvousH\x00R\x0frelayRendezvous\x122\n" +
 	"\vrelay_error\x18\n" +
 	" \x01(\v2\x0f.kin.RelayErrorH\x00R\n" +
-	"relayError\x12\"\n" +
+	"relayError\x128\n" +
+	"\rcatalog_offer\x18\v \x01(\v2\x11.kin.CatalogOfferH\x00R\fcatalogOffer\x122\n" +
+	"\vcatalog_ack\x18\f \x01(\v2\x0f.kin.CatalogAckH\x00R\n" +
+	"catalogAck\x12\"\n" +
 	"\x05error\x18\x0f \x01(\v2\n" +
 	".kin.ErrorH\x00R\x05errorB\t\n" +
 	"\apayload\"C\n" +
@@ -885,7 +1096,19 @@ const file_kin_proto_rawDesc = "" +
 	"\x12peer_external_addr\x18\x03 \x01(\tR\x10peerExternalAddr\"$\n" +
 	"\n" +
 	"RelayError\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reasonB\x1dZ\x1bgithub.com/niklod/kin/kinpbb\x06proto3"
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xb0\x01\n" +
+	"\vCatalogFile\x12\x17\n" +
+	"\afile_id\x18\x01 \x01(\fR\x06fileId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\"\n" +
+	"\rmod_time_unix\x18\x04 \x01(\x03R\vmodTimeUnix\x12\"\n" +
+	"\rowner_node_id\x18\x05 \x01(\fR\vownerNodeId\x12\x18\n" +
+	"\adeleted\x18\x06 \x01(\bR\adeleted\"6\n" +
+	"\fCatalogOffer\x12&\n" +
+	"\x05files\x18\x01 \x03(\v2\x10.kin.CatalogFileR\x05files\"3\n" +
+	"\n" +
+	"CatalogAck\x12%\n" +
+	"\x0ereceived_count\x18\x01 \x01(\rR\rreceivedCountB\x1dZ\x1bgithub.com/niklod/kin/kinpbb\x06proto3"
 
 var (
 	file_kin_proto_rawDescOnce sync.Once
@@ -899,7 +1122,7 @@ func file_kin_proto_rawDescGZIP() []byte {
 	return file_kin_proto_rawDescData
 }
 
-var file_kin_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_kin_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_kin_proto_goTypes = []any{
 	(*Envelope)(nil),        // 0: kin.Envelope
 	(*Handshake)(nil),       // 1: kin.Handshake
@@ -913,6 +1136,9 @@ var file_kin_proto_goTypes = []any{
 	(*RelayConnect)(nil),    // 9: kin.RelayConnect
 	(*RelayRendezvous)(nil), // 10: kin.RelayRendezvous
 	(*RelayError)(nil),      // 11: kin.RelayError
+	(*CatalogFile)(nil),     // 12: kin.CatalogFile
+	(*CatalogOffer)(nil),    // 13: kin.CatalogOffer
+	(*CatalogAck)(nil),      // 14: kin.CatalogAck
 }
 var file_kin_proto_depIdxs = []int32{
 	1,  // 0: kin.Envelope.handshake:type_name -> kin.Handshake
@@ -925,12 +1151,15 @@ var file_kin_proto_depIdxs = []int32{
 	9,  // 7: kin.Envelope.relay_connect:type_name -> kin.RelayConnect
 	10, // 8: kin.Envelope.relay_rendezvous:type_name -> kin.RelayRendezvous
 	11, // 9: kin.Envelope.relay_error:type_name -> kin.RelayError
-	6,  // 10: kin.Envelope.error:type_name -> kin.Error
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	13, // 10: kin.Envelope.catalog_offer:type_name -> kin.CatalogOffer
+	14, // 11: kin.Envelope.catalog_ack:type_name -> kin.CatalogAck
+	6,  // 12: kin.Envelope.error:type_name -> kin.Error
+	12, // 13: kin.CatalogOffer.files:type_name -> kin.CatalogFile
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_kin_proto_init() }
@@ -949,6 +1178,8 @@ func file_kin_proto_init() {
 		(*Envelope_RelayConnect)(nil),
 		(*Envelope_RelayRendezvous)(nil),
 		(*Envelope_RelayError)(nil),
+		(*Envelope_CatalogOffer)(nil),
+		(*Envelope_CatalogAck)(nil),
 		(*Envelope_Error)(nil),
 	}
 	type x struct{}
@@ -957,7 +1188,7 @@ func file_kin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kin_proto_rawDesc), len(file_kin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

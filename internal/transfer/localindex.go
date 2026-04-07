@@ -64,6 +64,13 @@ func (idx *LocalIndex) AddWithHash(hash [32]byte, path string) {
 	idx.mu.Unlock()
 }
 
+// Remove deletes the entry for the given hash from the index.
+func (idx *LocalIndex) Remove(hash [32]byte) {
+	idx.mu.Lock()
+	delete(idx.index, hash)
+	idx.mu.Unlock()
+}
+
 // Lookup returns the path for a file with the given hash, or ("", false).
 func (idx *LocalIndex) Lookup(hash [32]byte) (string, bool) {
 	idx.mu.RLock()

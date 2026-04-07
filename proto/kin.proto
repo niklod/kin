@@ -17,6 +17,9 @@ message Envelope {
     RelayConnect    relay_connect    = 8;
     RelayRendezvous relay_rendezvous = 9;
     RelayError      relay_error      = 10;
+    // Catalog exchange messages (11–12)
+    CatalogOffer    catalog_offer    = 11;
+    CatalogAck      catalog_ack      = 12;
     Error           error            = 15;
   }
 }
@@ -81,4 +84,26 @@ message RelayRendezvous {
 // Relay → Node: rendezvous failed.
 message RelayError {
   string reason = 1; // "peer_not_registered", "peer_not_found"
+}
+
+// ── Catalog exchange ────────────────────────────────────────────────────────
+
+// A single file catalog entry sent between peers.
+message CatalogFile {
+  bytes  file_id       = 1; // 32-byte SHA-256
+  string name          = 2; // original filename (base name)
+  int64  size          = 3; // file size in bytes
+  int64  mod_time_unix = 4; // modification time, unix seconds
+  bytes  owner_node_id = 5; // 32-byte NodeID of file owner
+  bool   deleted       = 6; // tombstone
+}
+
+// Node → Peer: offer this node's full catalog.
+message CatalogOffer {
+  repeated CatalogFile files = 1;
+}
+
+// Peer → Node: acknowledge catalog receipt.
+message CatalogAck {
+  uint32 received_count = 1;
 }

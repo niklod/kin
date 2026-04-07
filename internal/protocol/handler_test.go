@@ -25,7 +25,7 @@ func TestHandler_FileRequest(t *testing.T) {
 	idx.Add(path)
 
 	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, nil)
+	handler := protocol.NewHandler(sender, nil, [32]byte{}, nil)
 
 	serverConn, clientConn := testutil.NewMemConnPair("127.0.0.1:0", 64)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -73,7 +73,7 @@ func TestHandler_FileRequest(t *testing.T) {
 func TestHandler_FileRequest_NotFound(t *testing.T) {
 	idx := transfer.NewLocalIndex()
 	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, nil)
+	handler := protocol.NewHandler(sender, nil, [32]byte{}, nil)
 
 	serverConn, clientConn := testutil.NewMemConnPair("127.0.0.1:0", 64)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,7 +102,7 @@ func TestHandler_FileRequest_NotFound(t *testing.T) {
 func TestHandler_InvalidFileID(t *testing.T) {
 	idx := transfer.NewLocalIndex()
 	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, nil)
+	handler := protocol.NewHandler(sender, nil, [32]byte{}, nil)
 
 	serverConn, clientConn := testutil.NewMemConnPair("127.0.0.1:0", 64)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -126,7 +126,7 @@ func TestHandler_InvalidFileID(t *testing.T) {
 func TestHandler_ContextCancel(t *testing.T) {
 	idx := transfer.NewLocalIndex()
 	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, nil)
+	handler := protocol.NewHandler(sender, nil, [32]byte{}, nil)
 
 	serverConn, _ := testutil.NewMemConnPair("127.0.0.1:0", 64)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -145,7 +145,7 @@ func TestHandler_ContextCancel(t *testing.T) {
 func TestHandler_EOF(t *testing.T) {
 	idx := transfer.NewLocalIndex()
 	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, nil)
+	handler := protocol.NewHandler(sender, nil, [32]byte{}, nil)
 
 	serverConn, _ := testutil.NewMemConnPair("127.0.0.1:0", 64)
 	ctx := context.Background()
@@ -164,7 +164,7 @@ func TestHandler_EOF(t *testing.T) {
 func TestHandler_UnknownMessage(t *testing.T) {
 	idx := transfer.NewLocalIndex()
 	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, nil)
+	handler := protocol.NewHandler(sender, nil, [32]byte{}, nil)
 
 	serverConn, clientConn := testutil.NewMemConnPair("127.0.0.1:0", 64)
 	ctx, cancel := context.WithCancel(context.Background())

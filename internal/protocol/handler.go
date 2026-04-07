@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/niklod/kin/internal/catalog"
 	"github.com/niklod/kin/internal/transfer"
 	"github.com/niklod/kin/kinpb"
 )
@@ -16,25 +17,41 @@ type Conn interface {
 	Send(*kinpb.Envelope) error
 	Recv() (*kinpb.Envelope, error)
 	RemoteAddr() string
+	PeerID() [32]byte
+}
+
+// CatalogExchanger provides catalog data for exchange with peers.
+type CatalogExchanger interface {
+	ListForPeer(excludeNodeID [32]byte) ([]*catalog.Entry, error)
+	PutPeerEntries(peerNodeID [32]byte, entries []*catalog.Entry) error
 }
 
 // Handler dispatches incoming protobuf messages for a single peer connection.
 type Handler struct {
-	sender *transfer.Sender
-	logger *slog.Logger
+	sender  *transfer.Sender
+	catalog CatalogExchanger
+	selfID  [32]byte
+	logger  *slog.Logger
 }
 
-// NewHandler creates a Handler backed by the given file sender.
-func NewHandler(sender *transfer.Sender, logger *slog.Logger) *Handler {
+// NewHandler creates a Handler backed by the given file sender and optional
+// catalog exchanger. If catalog is nil, catalog exchange is disabled.
+func NewHandler(sender *transfer.Sender, cat CatalogExchanger, selfID [32]byte, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{sender: sender, logger: logger}
+	return &Handler{sender: sender, catalog: cat, selfID: selfID, logger: logger}
 }
 
 // Serve reads messages from conn in a loop and dispatches them until the
 // connection closes or ctx is cancelled.
 func (h *Handler) Serve(ctx context.Context, conn Conn) {
+	if h.catalog != nil {
+		if err := h.sendCatalogOffer(conn); err != nil {
+			h.logger.Warn("send catalog offer", "peer", conn.RemoteAddr(), "err", err)
+		}
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -57,6 +74,11 @@ func (h *Handler) dispatch(ctx context.Context, env *kinpb.Envelope, conn Conn) 
 	switch p := env.Payload.(type) {
 	case *kinpb.Envelope_FileRequest:
 		return h.handleFileRequest(ctx, p.FileRequest, conn)
+	case *kinpb.Envelope_CatalogOffer:
+		return h.handleCatalogOffer(p.CatalogOffer, conn)
+	case *kinpb.Envelope_CatalogAck:
+		h.logger.Debug("catalog ack", "peer", conn.RemoteAddr(), "count", p.CatalogAck.ReceivedCount)
+		return nil
 	default:
 		return fmt.Errorf("handler: unhandled message type %T", env.Payload)
 	}
@@ -74,3 +96,47 @@ func (h *Handler) handleFileRequest(ctx context.Context, req *kinpb.FileRequest,
 	h.logger.Debug("file request", "peer", conn.RemoteAddr(), "file_id", fmt.Sprintf("%x", fileID[:8]))
 	return h.sender.HandleRequest(ctx, fileID, conn)
 }
+
+func (h *Handler) sendCatalogOffer(conn Conn) error {
+	entries, err := h.catalog.ListForPeer(conn.PeerID())
+	if err != nil {
+		return fmt.Errorf("list for peer: %w", err)
+	}
+
+	files := catalog.EntriesToProto(entries)
+	h.logger.Debug("sending catalog offer", "peer", conn.RemoteAddr(), "files", len(files))
+	return conn.Send(&kinpb.Envelope{
+		Payload: &kinpb.Envelope_CatalogOffer{
+			CatalogOffer: &kinpb.CatalogOffer{Files: files},
+		},
+	})
+}
+
+func (h *Handler) handleCatalogOffer(offer *kinpb.CatalogOffer, conn Conn) error {
+	if h.catalog == nil {
+		return nil
+	}
+
+	peerID := conn.PeerID()
+	entries := make([]*catalog.Entry, 0, len(offer.Files))
+	for _, f := range offer.Files {
+		e, err := catalog.ProtoToEntry(f)
+		if err != nil {
+			h.logger.Debug("skip bad catalog entry", "peer", conn.RemoteAddr(), "err", err)
+			continue
+		}
+		entries = append(entries, e)
+	}
+
+	if err := h.catalog.PutPeerEntries(peerID, entries); err != nil {
+		return fmt.Errorf("put peer entries: %w", err)
+	}
+
+	h.logger.Debug("received catalog offer", "peer", conn.RemoteAddr(), "accepted", len(entries))
+	return conn.Send(&kinpb.Envelope{
+		Payload: &kinpb.Envelope_CatalogAck{
+			CatalogAck: &kinpb.CatalogAck{ReceivedCount: uint32(len(entries))}, //nolint:gosec
+		},
+	})
+}
+
