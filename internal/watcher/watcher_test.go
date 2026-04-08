@@ -64,7 +64,7 @@ func (s *WatcherSuite) TestStartupScan() {
 	os.WriteFile(filepath.Join(s.dir, "b.txt"), []byte("bbb"), 0644)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	w := watcher.New(s.dir, s.store, s.index, nil)
+	w := watcher.New(s.dir, s.store, s.index, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -81,7 +81,7 @@ func (s *WatcherSuite) TestStartupScan() {
 
 func (s *WatcherSuite) TestFileCreate() {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := watcher.New(s.dir, s.store, s.index, nil)
+	w := watcher.New(s.dir, s.store, s.index, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -107,7 +107,7 @@ func (s *WatcherSuite) TestFileModify() {
 	originalHash := sha256.Sum256([]byte("original"))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	w := watcher.New(s.dir, s.store, s.index, nil)
+	w := watcher.New(s.dir, s.store, s.index, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -136,7 +136,7 @@ func (s *WatcherSuite) TestFileDelete() {
 	os.WriteFile(path, []byte("doomed"), 0644)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	w := watcher.New(s.dir, s.store, s.index, nil)
+	w := watcher.New(s.dir, s.store, s.index, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -160,7 +160,7 @@ func (s *WatcherSuite) TestFileDelete() {
 
 func (s *WatcherSuite) TestContextCancel() {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := watcher.New(s.dir, s.store, s.index, nil)
+	w := watcher.New(s.dir, s.store, s.index, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()

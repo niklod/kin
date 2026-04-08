@@ -106,6 +106,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("daemon socket: %w", err)
 	}
 	ipcHandler.server = srv
+	protoHandler.SetOnCatalogUpdate(srv.BroadcastCatalogUpdated)
 
 	d.logger.Info("kin running",
 		"node_id", id.NodeIDHex(),
@@ -129,9 +130,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	go srv.Serve(ctx)
 
-	// Start file watcher.
+	// Start file watcher. Broadcasts catalog_updated on each file change.
 	go func() {
-		w := watcher.New(d.sharedDir, cat, idx, d.logger)
+		w := watcher.New(d.sharedDir, cat, idx, d.logger, srv.BroadcastCatalogUpdated)
 		if err := w.Run(ctx); err != nil && ctx.Err() == nil {
 			d.logger.Error("watcher", "err", err)
 		}

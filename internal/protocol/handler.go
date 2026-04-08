@@ -28,10 +28,11 @@ type CatalogExchanger interface {
 
 // Handler dispatches incoming protobuf messages for a single peer connection.
 type Handler struct {
-	sender  *transfer.Sender
-	catalog CatalogExchanger
-	selfID  [32]byte
-	logger  *slog.Logger
+	sender          *transfer.Sender
+	catalog         CatalogExchanger
+	selfID          [32]byte
+	logger          *slog.Logger
+	onCatalogUpdate func()
 }
 
 // NewHandler creates a Handler backed by the given file sender and optional
@@ -41,6 +42,13 @@ func NewHandler(sender *transfer.Sender, cat CatalogExchanger, selfID [32]byte, 
 		logger = slog.Default()
 	}
 	return &Handler{sender: sender, catalog: cat, selfID: selfID, logger: logger}
+}
+
+// SetOnCatalogUpdate sets a callback invoked when remote catalog entries are received.
+// Must be called before any goroutine calls Serve (the go statement that starts
+// acceptLoop creates the required happens-before edge).
+func (h *Handler) SetOnCatalogUpdate(fn func()) {
+	h.onCatalogUpdate = fn
 }
 
 // Serve reads messages from conn in a loop and dispatches them until the
@@ -133,6 +141,9 @@ func (h *Handler) handleCatalogOffer(offer *kinpb.CatalogOffer, conn Conn) error
 	}
 
 	h.logger.Debug("received catalog offer", "peer", conn.RemoteAddr(), "accepted", len(entries))
+	if h.onCatalogUpdate != nil {
+		h.onCatalogUpdate()
+	}
 	return conn.Send(&kinpb.Envelope{
 		Payload: &kinpb.Envelope_CatalogAck{
 			CatalogAck: &kinpb.CatalogAck{ReceivedCount: uint32(len(entries))}, //nolint:gosec

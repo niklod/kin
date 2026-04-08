@@ -284,3 +284,8 @@ func (s *Server) BroadcastPeerOffline(peerID [32]byte) {
 		Data: marshalData(PeerOfflineEvent{NodeID: hexNodeID(peerID)}),
 	})
 }
+
+// BroadcastCatalogUpdated notifies all subscribers that the file catalog changed.
+func (s *Server) BroadcastCatalogUpdated() {
+	s.Broadcast(Event{Type: EventCatalogUpdated})
+}

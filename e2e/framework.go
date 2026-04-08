@@ -19,6 +19,7 @@ type Cluster struct {
 	relay       *Relay
 	baseDir     string
 	peers       []*Peer
+	tuiPeers    []*TUIPeer
 }
 
 // NewCluster builds kin and relay binaries and starts a relay server.
@@ -56,8 +57,23 @@ func (c *Cluster) NewPeer(name string) *Peer {
 	return p
 }
 
-// Cleanup stops all peers and the relay, and dumps logs on test failure.
+// NewTUIPeer creates a TUI peer connected to the given backing peer's daemon.
+// The backing peer must already be started via Start().
+func (c *Cluster) NewTUIPeer(name string, backingPeer *Peer) *TUIPeer {
+	tp := newTUIPeer(c.t, name, c.kinBinary, backingPeer)
+	c.tuiPeers = append(c.tuiPeers, tp)
+	return tp
+}
+
+// Cleanup stops all TUI peers, then daemon peers, then the relay.
+// TUI peers are stopped first because they depend on running daemons.
 func (c *Cluster) Cleanup() {
+	for _, tp := range c.tuiPeers {
+		if c.t.Failed() {
+			tp.DumpScreen()
+		}
+		tp.Stop()
+	}
 	for _, p := range c.peers {
 		if c.t.Failed() {
 			p.DumpLogs()

@@ -37,22 +37,25 @@ type LocalIndexer interface {
 // Watcher monitors a directory for filesystem events and updates the catalog
 // and local index accordingly.
 type Watcher struct {
-	dir     string
-	catalog CatalogWriter
-	index   LocalIndexer
-	logger  *slog.Logger
+	dir      string
+	catalog  CatalogWriter
+	index    LocalIndexer
+	logger   *slog.Logger
+	onChange func()
 }
 
-// New creates a Watcher for dir.
-func New(dir string, cat CatalogWriter, index LocalIndexer, logger *slog.Logger) *Watcher {
+// New creates a Watcher for dir. The optional onChange callback is invoked
+// after each catalog mutation (file indexed or removed).
+func New(dir string, cat CatalogWriter, index LocalIndexer, logger *slog.Logger, onChange func()) *Watcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Watcher{
-		dir:     dir,
-		catalog: cat,
-		index:   index,
-		logger:  logger,
+		dir:      dir,
+		catalog:  cat,
+		index:    index,
+		logger:   logger,
+		onChange: onChange,
 	}
 }
 
@@ -153,6 +156,7 @@ func (w *Watcher) indexFile(path string) error {
 
 	w.logger.Debug("indexed file", "name", entry.Name, "size", entry.Size,
 		"file_id", fmt.Sprintf("%x", hash[:8]))
+	w.notifyChange()
 	return nil
 }
 
@@ -173,6 +177,7 @@ func (w *Watcher) handleRemove(path string) {
 	w.index.Remove(entry.FileID)
 	w.logger.Debug("removed file", "name", entry.Name,
 		"file_id", fmt.Sprintf("%x", entry.FileID[:8]))
+	w.notifyChange()
 }
 
 // debouncer groups rapid filesystem events by path.
@@ -213,6 +218,12 @@ func (d *debouncer) cancel(path string) {
 	if t, ok := d.timers[path]; ok {
 		t.Stop()
 		delete(d.timers, path)
+	}
+}
+
+func (w *Watcher) notifyChange() {
+	if w.onChange != nil {
+		w.onChange()
 	}
 }
 
