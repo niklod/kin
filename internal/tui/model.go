@@ -230,7 +230,7 @@ func (m Model) handleEvent(ev daemon.Event) (tea.Model, tea.Cmd) {
 			m.peers.UpdatePeerOffline(off.NodeID)
 		}
 	case daemon.EventCatalogUpdated:
-		return m, fetchCatalog(m.client)
+		return m, tea.Batch(fetchCatalog(m.client), waitForEvent(m.eventCh))
 	}
 	return m, waitForEvent(m.eventCh)
 }

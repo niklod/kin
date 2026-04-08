@@ -157,9 +157,15 @@ func (s *E2ESuite) TestTUI_CatalogRealtimeUpdate() {
 
 	tui.WaitForScreen(`readme\.txt`)
 
+	// First update: add a file while TUI is running.
 	d.WriteFile("notes.md", "new notes content")
-
 	tui.WaitForScreenTimeout(`notes\.md`, 10*time.Second)
+
+	// Second update: add another file to verify the event chain is not broken.
+	// This catches the bug where handleEvent returns fetchCatalog without
+	// re-registering waitForEvent, breaking all subsequent updates.
+	d.WriteFile("todo.txt", "buy milk")
+	tui.WaitForScreenTimeout(`todo\.txt`, 10*time.Second)
 }
 
 func (s *E2ESuite) TestTUI_RemotePeerCatalog() {
