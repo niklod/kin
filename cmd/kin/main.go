@@ -2,6 +2,7 @@
 //
 // Subcommands:
 //
+//	kin                     Interactive TUI (requires running daemon)
 //	kin run                 Start the node daemon
 //	kin invite              Generate a one-time invite link
 //	kin join <kin:token>    Join via an invite link
@@ -24,41 +25,52 @@ import (
 	"github.com/niklod/kin/internal/catalog"
 	"github.com/niklod/kin/internal/config"
 	"github.com/niklod/kin/internal/connmgr"
+	"github.com/niklod/kin/internal/daemon"
 	"github.com/niklod/kin/internal/identity"
 	"github.com/niklod/kin/internal/invite"
+	"github.com/niklod/kin/internal/ipc"
 	"github.com/niklod/kin/internal/peerstore"
-	"github.com/niklod/kin/internal/protocol"
-	"github.com/niklod/kin/internal/transfer"
 	"github.com/niklod/kin/internal/transport"
-	"github.com/niklod/kin/internal/watcher"
+	"github.com/niklod/kin/internal/tui"
 	"github.com/niklod/kin/kinpb"
 )
-
-const defaultListenAddr = "0.0.0.0:7777"
 
 func main() {
 	configDir := flag.String("config-dir", "", "override config directory")
 	sharedDir := flag.String("shared-dir", "", "override shared folder directory")
-	listenAddr := flag.String("listen", defaultListenAddr, "address to listen on")
+	listenAddr := flag.String("listen", config.DefaultListenAddr, "address to listen on")
 	relayAddr := flag.String("relay", "", "relay server address (host:port) for NAT traversal")
 	debug := flag.Bool("debug", false, "enable verbose debug logging")
 	flag.Parse()
 
-	if *debug {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})))
+	cfgDir, err := resolveConfigDir(*configDir)
+	if err != nil {
+		fatalf("config dir: %v", err)
 	}
 
 	args := flag.Args()
 	if len(args) == 0 {
-		usage()
-		os.Exit(1)
+		// TUI path — tui.Run handles its own debug logging.
+		if err := tui.Run(tui.Config{
+			ConfigDir:  cfgDir,
+			SharedDir:  *sharedDir,
+			ListenAddr: *listenAddr,
+			RelayAddr:  *relayAddr,
+			Debug:      *debug,
+		}); err != nil {
+			fatalf("%v", err)
+		}
+		return
 	}
 
-	cfgDir, err := resolveConfigDir(*configDir)
-	if err != nil {
-		fatalf("config dir: %v", err)
+	// CLI mode: set up debug logging (TUI handles its own).
+	if *debug {
+		logger, f, err := config.SetupDebugLog(cfgDir, true)
+		if err != nil {
+			fatalf("debug log: %v", err)
+		}
+		defer f.Close()
+		slog.SetDefault(logger)
 	}
 
 	switch args[0] {
@@ -94,107 +106,34 @@ func resolveSharedDir(override string) (string, error) {
 }
 
 func cmdRun(cfgDir, sharedDirOverride, listenAddr, relayAddr string) {
-	id := mustLoadOrGenerate(cfgDir)
-	store := mustOpenStore(cfgDir)
-	defer store.Close()
-
 	sharedDir, err := resolveSharedDir(sharedDirOverride)
 	if err != nil {
 		fatalf("shared dir: %v", err)
-	}
-	if err := os.MkdirAll(sharedDir, 0755); err != nil {
-		fatalf("create shared dir: %v", err)
-	}
-
-	cat := mustOpenCatalog(cfgDir, id.NodeID)
-	defer cat.Close()
-
-	idx := transfer.NewLocalIndex()
-	if err := idx.Scan(sharedDir); err != nil {
-		slog.Warn("scan shared dir", "err", err)
-	}
-
-	sender := transfer.NewSender(idx)
-	handler := protocol.NewHandler(sender, cat, id.NodeID, slog.Default())
-
-	ln, err := transport.Listen(listenAddr, id)
-	if err != nil {
-		fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-
-	fmt.Printf("kin running\n")
-	fmt.Printf("  NodeID: %s\n", id.NodeIDHex())
-	fmt.Printf("  Listen: %s\n", ln.Addr())
-	fmt.Printf("  Shared: %s\n", sharedDir)
-	if relayAddr != "" {
-		fmt.Printf("  Relay:  %s\n", relayAddr)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Start file watcher for the shared folder.
-	go func() {
-		w := watcher.New(sharedDir, cat, idx, slog.Default())
-		if err := w.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("watcher", "err", err)
-		}
-	}()
-
-	// Accept incoming connections from the transport listener.
-	go func() {
-		for {
-			conn, _, err := ln.Accept()
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					slog.Warn("accept", "err", err)
-					continue
-				}
-			}
-			if err := store.UpdateLastSeen(conn.PeerNodeID); err != nil {
-				slog.Warn("update last seen", "peer", fmt.Sprintf("%x", conn.PeerNodeID[:8]), "err", err)
-			}
-			go handler.Serve(ctx, conn)
-		}
-	}()
-
-	// Register with relay and keep the connection alive so remote peers can
-	// discover our external address for NAT hole punching.
-	if relayAddr != "" {
-		d := &connmgr.Dialer{ID: id, Listener: ln}
-		go func() {
-			backoff := time.Second
-			const maxBackoff = 30 * time.Second
-			for {
-				err := d.ServePunch(ctx, relayAddr, slog.Default())
-				if ctx.Err() != nil {
-					return
-				}
-				slog.Warn("relay connection lost, reconnecting", "err", err, "backoff", backoff)
-				select {
-				case <-time.After(backoff):
-				case <-ctx.Done():
-					return
-				}
-				if backoff < maxBackoff {
-					backoff *= 2
-					if backoff > maxBackoff {
-						backoff = maxBackoff
-					}
-				}
-			}
-		}()
+	d := daemon.New(cfgDir, sharedDir, listenAddr, relayAddr, slog.Default())
+	if err := d.Run(ctx); err != nil {
+		fatalf("%v", err)
 	}
-
-	<-ctx.Done()
 	fmt.Println("\nshutting down")
 }
 
 func cmdInvite(cfgDir, listenAddr, relayAddr string) {
+	// Try daemon first.
+	if client, err := ipc.TryDaemon(cfgDir); err == nil {
+		defer client.Close()
+		resp, err := client.Invite()
+		if err != nil {
+			fatalf("invite via daemon: %v", err)
+		}
+		fmt.Println(resp.Token)
+		return
+	}
+
+	// Fallback: direct mode (no daemon running).
 	id := mustLoadOrGenerate(cfgDir)
 
 	var endpoints []string
@@ -217,6 +156,18 @@ func cmdInvite(cfgDir, listenAddr, relayAddr string) {
 }
 
 func cmdJoin(cfgDir, rawToken, listenAddr string) {
+	// Try daemon first.
+	if client, err := ipc.TryDaemon(cfgDir); err == nil {
+		defer client.Close()
+		resp, err := client.Join(rawToken)
+		if err != nil {
+			fatalf("join via daemon: %v", err)
+		}
+		fmt.Printf("connected to %s\n", resp.PeerNodeID[:16])
+		return
+	}
+
+	// Fallback: direct mode (no daemon running).
 	id := mustLoadOrGenerate(cfgDir)
 	store := mustOpenStore(cfgDir)
 	defer store.Close()
@@ -239,8 +190,6 @@ func cmdJoin(cfgDir, rawToken, listenAddr string) {
 	}
 
 	// Open a listener so Dial can share the UDP socket for NAT punch.
-	// Use --listen 0.0.0.0:0 (or a different port) if kin run is already
-	// binding the default port on this host.
 	ln, err := transport.Listen(listenAddr, id)
 	if err != nil {
 		fatalf("listen: %v", err)
@@ -288,6 +237,32 @@ func cmdJoin(cfgDir, rawToken, listenAddr string) {
 }
 
 func cmdStatus(cfgDir string) {
+	// Try daemon first.
+	if client, err := ipc.TryDaemon(cfgDir); err == nil {
+		defer client.Close()
+		resp, err := client.Status()
+		if err != nil {
+			fatalf("status via daemon: %v", err)
+		}
+		fmt.Printf("NodeID: %s\n", resp.NodeID)
+		fmt.Printf("Listen: %s\n", resp.ListenAddr)
+		fmt.Printf("Shared: %s\n", resp.SharedDir)
+		if resp.RelayAddr != "" {
+			fmt.Printf("Relay:  %s (online=%v)\n", resp.RelayAddr, resp.RelayOnline)
+		}
+		fmt.Printf("Peers:  %d\n", resp.PeerCount)
+
+		peers, err := client.Peers()
+		if err != nil {
+			return
+		}
+		for _, p := range peers.Peers {
+			fmt.Printf("  %s  %s  %s\n", p.NodeIDShort, p.TrustState, p.LastSeen)
+		}
+		return
+	}
+
+	// Fallback: direct mode.
 	id := mustLoadOrGenerate(cfgDir)
 	fmt.Printf("NodeID: %s\n", id.NodeIDHex())
 
