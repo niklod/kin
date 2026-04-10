@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 
 	"github.com/niklod/kin/internal/catalog"
 	"github.com/niklod/kin/internal/transfer"
@@ -33,7 +34,28 @@ type Handler struct {
 	selfID          [32]byte
 	logger          *slog.Logger
 	onCatalogUpdate func()
+
+	mu    sync.Mutex
+	conns map[[32]byte]*connEntry // active peer connections
 }
+
+// connEntry wraps a Conn with a send mutex to serialize writes from
+// Serve (dispatch loop) and BroadcastCatalog (watcher callback).
+// It implements the Conn interface so it can be used transparently.
+type connEntry struct {
+	conn Conn
+	mu   sync.Mutex
+}
+
+func (e *connEntry) Send(env *kinpb.Envelope) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.conn.Send(env)
+}
+
+func (e *connEntry) Recv() (*kinpb.Envelope, error) { return e.conn.Recv() }
+func (e *connEntry) RemoteAddr() string             { return e.conn.RemoteAddr() }
+func (e *connEntry) PeerID() [32]byte               { return e.conn.PeerID() }
 
 // NewHandler creates a Handler backed by the given file sender and optional
 // catalog exchanger. If catalog is nil, catalog exchange is disabled.
@@ -41,7 +63,7 @@ func NewHandler(sender *transfer.Sender, cat CatalogExchanger, selfID [32]byte, 
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{sender: sender, catalog: cat, selfID: selfID, logger: logger}
+	return &Handler{sender: sender, catalog: cat, selfID: selfID, logger: logger, conns: make(map[[32]byte]*connEntry)}
 }
 
 // SetOnCatalogUpdate sets a callback invoked when remote catalog entries are received.
@@ -54,8 +76,13 @@ func (h *Handler) SetOnCatalogUpdate(fn func()) {
 // Serve reads messages from conn in a loop and dispatches them until the
 // connection closes or ctx is cancelled.
 func (h *Handler) Serve(ctx context.Context, conn Conn) {
+	peerID := conn.PeerID()
+	entry := h.registerConn(peerID, conn)
+	defer h.unregisterConn(peerID)
+
+	// Use entry (mutex-wrapped) for all sends to serialize with BroadcastCatalog.
 	if h.catalog != nil {
-		if err := h.sendCatalogOffer(conn); err != nil {
+		if err := h.sendCatalogOfferTo(entry); err != nil {
 			h.logger.Warn("send catalog offer", "peer", conn.RemoteAddr(), "err", err)
 		}
 	}
@@ -72,7 +99,7 @@ func (h *Handler) Serve(ctx context.Context, conn Conn) {
 			h.logger.Debug("recv error", "peer", conn.RemoteAddr(), "err", err)
 			return
 		}
-		if err := h.dispatch(ctx, env, conn); err != nil {
+		if err := h.dispatch(ctx, env, entry); err != nil {
 			h.logger.Warn("dispatch error", "peer", conn.RemoteAddr(), "err", err)
 		}
 	}
@@ -105,7 +132,8 @@ func (h *Handler) handleFileRequest(ctx context.Context, req *kinpb.FileRequest,
 	return h.sender.HandleRequest(ctx, fileID, conn)
 }
 
-func (h *Handler) sendCatalogOffer(conn Conn) error {
+// sendCatalogOfferTo builds and sends a catalog offer to a single peer.
+func (h *Handler) sendCatalogOfferTo(conn Conn) error {
 	entries, err := h.catalog.ListForPeer(conn.PeerID())
 	if err != nil {
 		return fmt.Errorf("list for peer: %w", err)
@@ -151,3 +179,37 @@ func (h *Handler) handleCatalogOffer(offer *kinpb.CatalogOffer, conn Conn) error
 	})
 }
 
+func (h *Handler) registerConn(peerID [32]byte, conn Conn) *connEntry {
+	entry := &connEntry{conn: conn}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.conns[peerID] = entry
+	return entry
+}
+
+func (h *Handler) unregisterConn(peerID [32]byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.conns, peerID)
+}
+
+// BroadcastCatalog sends the current catalog to all connected peers.
+// Errors on individual connections are logged but do not stop the broadcast.
+func (h *Handler) BroadcastCatalog() {
+	if h.catalog == nil {
+		return
+	}
+
+	h.mu.Lock()
+	snapshot := make(map[[32]byte]*connEntry, len(h.conns))
+	for id, ce := range h.conns {
+		snapshot[id] = ce
+	}
+	h.mu.Unlock()
+
+	for _, ce := range snapshot {
+		if err := h.sendCatalogOfferTo(ce); err != nil {
+			h.logger.Warn("broadcast catalog", "peer", ce.RemoteAddr(), "err", err)
+		}
+	}
+}

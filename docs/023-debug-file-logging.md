@@ -2,7 +2,12 @@
 
 ## What
 
-When the `--debug` flag is set, kin writes structured logs (slog, LevelDebug) to a timestamped file at `~/.config/kin/logs/kin-debug-<timestamp>.log`. In CLI mode, logs also go to stderr. In TUI mode, logs go to the file only since the TUI owns the terminal.
+When the `--debug` flag is set, kin writes structured logs (slog, LevelDebug) to a timestamped file inside the config directory. In CLI mode, logs also go to stderr. In TUI mode, logs go to the file only since the TUI owns the terminal.
+
+| Platform      | Log path                                              |
+|---------------|-------------------------------------------------------|
+| macOS / Linux | `~/.config/kin/logs/kin-debug-<timestamp>.log`        |
+| Windows       | `%APPDATA%\kin\logs\kin-debug-<timestamp>.log`        |
 
 ## Why
 

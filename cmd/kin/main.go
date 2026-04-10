@@ -137,7 +137,7 @@ func cmdInvite(cfgDir, listenAddr, relayAddr string) {
 	id := mustLoadOrGenerate(cfgDir)
 
 	var endpoints []string
-	if host, _, err := net.SplitHostPort(listenAddr); err == nil && host != "0.0.0.0" && host != "" {
+	if host, _, err := net.SplitHostPort(listenAddr); err == nil && host != "0.0.0.0" && host != "" && host != "::" {
 		endpoints = append(endpoints, listenAddr)
 	}
 	if relayAddr != "" {

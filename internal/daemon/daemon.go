@@ -106,6 +106,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("daemon socket: %w", err)
 	}
 	ipcHandler.server = srv
+
+	// When peer catalog arrives: notify IPC subscribers (TUI) only.
+	// Do NOT re-broadcast to peers here — that would create a ping-pong loop
+	// (A sends to B, B's onCatalogUpdate sends back to A, repeat forever).
 	protoHandler.SetOnCatalogUpdate(srv.BroadcastCatalogUpdated)
 
 	d.logger.Info("kin running",
@@ -130,9 +134,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	go srv.Serve(ctx)
 
-	// Start file watcher. Broadcasts catalog_updated on each file change.
+	// Start file watcher. Notifies IPC subscribers (TUI) and pushes updated catalog to connected peers.
 	go func() {
-		w := watcher.New(d.sharedDir, cat, idx, d.logger, srv.BroadcastCatalogUpdated)
+		onChange := func() {
+			srv.BroadcastCatalogUpdated()
+			protoHandler.BroadcastCatalog()
+		}
+		w := watcher.New(d.sharedDir, cat, idx, d.logger, onChange)
 		if err := w.Run(ctx); err != nil && ctx.Err() == nil {
 			d.logger.Error("watcher", "err", err)
 		}

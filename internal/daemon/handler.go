@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/niklod/kin/internal/catalog"
@@ -125,7 +126,7 @@ func (h *Handler) handlePeers(id uint64) Response {
 
 func (h *Handler) handleInvite(id uint64) Response {
 	var endpoints []string
-	if addr := h.listener.Addr().String(); addr != "" {
+	if addr := h.listener.Addr().String(); addr != "" && isRoutableListenAddr(addr) {
 		endpoints = append(endpoints, addr)
 	}
 	if h.relayAddr != "" {
@@ -250,4 +251,16 @@ func shortID(hex string) string {
 		return hex[:16]
 	}
 	return hex
+}
+
+// isRoutableListenAddr returns false for wildcard listen addresses like
+// [::]:7777 or 0.0.0.0:7777 that are not useful as direct dial targets.
+// Loopback addresses (127.0.0.1, ::1) pass — they are valid for local testing.
+func isRoutableListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && !ip.IsUnspecified()
 }

@@ -5,6 +5,11 @@
 ## What
 The shared folder defaults to `~/Kin` in the user's home directory.
 
+| Platform      | Path                          |
+|---------------|-------------------------------|
+| macOS / Linux | `~/Kin`                       |
+| Windows       | `C:\Users\<user>\Kin`         |
+
 ## Why
 - Visible and intuitive, following Dropbox/Syncthing convention
 - Alternatives considered:

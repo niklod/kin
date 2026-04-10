@@ -165,6 +165,108 @@ func (s *CatalogExchangeSuite) TestNilCatalogSkipsExchange() {
 	serverConn.CloseRecv()
 }
 
+func (s *CatalogExchangeSuite) TestBroadcastCatalogSendsToAllConnectedPeers() {
+	nodeC := [32]byte{0xCC}
+
+	s.Require().NoError(s.catA.PutLocal(&catalog.Entry{
+		FileID: [32]byte{1}, Name: "a.txt", Size: 10,
+		ModTime: time.Now().UTC(), LocalPath: "/Kin/a.txt",
+	}))
+
+	idx := transfer.NewLocalIndex()
+	sender := transfer.NewSender(idx)
+	handler := protocol.NewHandler(sender, s.catA, nodeA, nil)
+
+	serverConnB, clientConnB := testutil.NewMemConnPairWithIDs("10.0.0.2:7777", 64, nodeA, nodeB)
+	serverConnC, clientConnC := testutil.NewMemConnPairWithIDs("10.0.0.3:7777", 64, nodeA, nodeC)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handler.Serve(ctx, serverConnB)
+	go handler.Serve(ctx, serverConnC)
+
+	// Drain initial catalog offers sent by Serve().
+	_, err := clientConnB.Recv()
+	s.Require().NoError(err)
+	_, err = clientConnC.Recv()
+	s.Require().NoError(err)
+
+	// Add a new file after connections are established.
+	s.Require().NoError(s.catA.PutLocal(&catalog.Entry{
+		FileID: [32]byte{2}, Name: "new.txt", Size: 42,
+		ModTime: time.Now().UTC(), LocalPath: "/Kin/new.txt",
+	}))
+
+	// Trigger broadcast to all connected peers.
+	handler.BroadcastCatalog()
+
+	// Both peers should receive updated catalog offers.
+	envB, err := clientConnB.Recv()
+	s.Require().NoError(err)
+	offerB := envB.GetCatalogOffer()
+	s.Require().NotNil(offerB)
+	s.Len(offerB.Files, 2)
+
+	envC, err := clientConnC.Recv()
+	s.Require().NoError(err)
+	offerC := envC.GetCatalogOffer()
+	s.Require().NotNil(offerC)
+	s.Len(offerC.Files, 2)
+}
+
+func (s *CatalogExchangeSuite) TestBroadcastCatalogNoPeersIsNoop() {
+	idx := transfer.NewLocalIndex()
+	sender := transfer.NewSender(idx)
+	handler := protocol.NewHandler(sender, s.catA, nodeA, nil)
+
+	// Should not panic with no connected peers.
+	handler.BroadcastCatalog()
+}
+
+func (s *CatalogExchangeSuite) TestBroadcastCatalogNilCatalogIsNoop() {
+	idx := transfer.NewLocalIndex()
+	sender := transfer.NewSender(idx)
+	handler := protocol.NewHandler(sender, nil, nodeA, nil)
+
+	// Should not panic with nil catalog.
+	handler.BroadcastCatalog()
+}
+
+func (s *CatalogExchangeSuite) TestConnUnregisteredAfterServeReturns() {
+	s.Require().NoError(s.catA.PutLocal(&catalog.Entry{
+		FileID: [32]byte{1}, Name: "a.txt", Size: 10,
+		ModTime: time.Now().UTC(), LocalPath: "/Kin/a.txt",
+	}))
+
+	idx := transfer.NewLocalIndex()
+	sender := transfer.NewSender(idx)
+	handler := protocol.NewHandler(sender, s.catA, nodeA, nil)
+
+	serverConn, clientConn := testutil.NewMemConnPairWithIDs("10.0.0.2:7777", 64, nodeA, nodeB)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		handler.Serve(ctx, serverConn)
+		close(done)
+	}()
+
+	// Drain initial offer.
+	_, err := clientConn.Recv()
+	s.Require().NoError(err)
+
+	// Cancel context and close recv to unblock Serve's Recv() call.
+	cancel()
+	serverConn.CloseRecv()
+	<-done
+
+	// After Serve returns, BroadcastCatalog should not send anything (conn unregistered).
+	handler.BroadcastCatalog()
+	s.Equal(0, clientConn.Drain(), "no messages should be sent after Serve returns")
+}
+
 func TestCatalogExchangeSuite(t *testing.T) {
 	suite.Run(t, new(CatalogExchangeSuite))
 }
